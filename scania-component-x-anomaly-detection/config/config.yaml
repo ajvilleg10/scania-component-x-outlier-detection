@@ -1,0 +1,160 @@
+project:
+  name: scania-component-x-outlier-detection
+  package_name: scania_anomaly
+  seed: 42
+  objective: outlier_detection_multivariate_time_series
+  version: 1.0.0
+
+environment:
+  platform: google_colab
+  use_drive: true
+  install_mode: editable
+
+execution:
+  mode: debug          # debug | full
+  max_vehicles_debug: 100
+  document_sampling_if_used: true
+  save_intermediate_artifacts: true
+
+paths:
+  drive_root: /content/drive/MyDrive/TFM_SCANIA
+  raw_dir: /content/drive/MyDrive/TFM_SCANIA/raw
+  raw_dir_alternative: /content/drive/MyDrive/TFM_SCANIA/data/raw/Dataset
+  processed_dir: /content/drive/MyDrive/TFM_SCANIA/processed
+  models_dir: /content/drive/MyDrive/TFM_SCANIA/models
+  outputs_dir: /content/drive/MyDrive/TFM_SCANIA/outputs
+  figures_dir: /content/drive/MyDrive/TFM_SCANIA/outputs/figures
+  tables_dir: /content/drive/MyDrive/TFM_SCANIA/outputs/tables
+  metrics_dir: /content/drive/MyDrive/TFM_SCANIA/outputs/metrics
+  doc_dir: /content/drive/MyDrive/TFM_SCANIA/doc
+
+dataset:
+  vehicle_col: vehicle_id
+  time_col: time_step
+  files:
+    train_operational: train_operational_readouts.csv
+    train_tte: train_tte.csv
+    train_specifications: train_specifications.csv
+    validation_operational: validation_operational_readouts.csv
+    validation_labels: validation_labels.csv
+    validation_specifications: validation_specifications.csv
+    test_operational: test_operational_readouts.csv
+    test_labels: test_labels.csv
+    test_specifications: test_specifications.csv
+  split_strategy:
+    train: train
+    validation: validation
+    test: test
+  train_label_source: train_tte
+  validation_label_source: validation_labels
+  test_label_source: test_labels
+  label_column_candidates:
+    - class_label
+    - in_study_repair
+    - is_outlier
+    - outlier
+    - label
+    - target
+    - is_anomaly
+    - anomaly
+    - repair
+    - failure
+
+spark:
+  app_name: ScaniaComponentXOutlierDetection
+  master: local[*]
+  shuffle_partitions: 64
+  driver_memory: 8g
+  arrow_enabled: true
+
+preprocessing:
+  id_col: vehicle_id
+  time_col: time_step
+  max_missing_ratio: 0.8
+  fill_strategy: median
+  min_variance: 0.0
+  fit_preprocessing_on: train
+  fit_scaler_on: train
+  use_specifications: false
+  drop_constant_columns: true
+  metadata_file: preprocessing_metadata.json
+  exclude_columns:
+    - vehicle_id
+    - time_step
+    - y_true
+    - class_label
+    - in_study_repair
+
+windowing:
+  window_size: 30
+  stride: 5
+  output_format: npz
+  label_policy: vehicle_label      # vehicle_label | max_label_in_window | unlabeled
+  aggregation_level: vehicle       # vehicle | window
+  analyze_time_irregularity: true
+  min_windows_per_vehicle: 1
+
+modeling:
+  framework: pytorch
+  batch_size: 128
+  epochs: 20
+  learning_rate: 0.001
+  latent_dim: 64
+  hidden_dim: 128
+  early_stopping_patience: 5
+  device: auto
+  train_holdout_fraction: 0.15
+  models:
+    - lstm_autoencoder
+    - cnn_lstm_autoencoder
+    - transformer_encoder_simplified
+  transformer_encoder_simplified:
+    d_model: 64
+    nhead: 4
+    num_layers: 2
+    dim_feedforward: 128
+    dropout: 0.1
+    use_bottleneck: true
+    bottleneck_dim: 32
+
+outlier_detection:
+  score_type: reconstruction_error
+  threshold_strategy: best_f1_on_validation   # validation_percentile | best_f1_on_validation
+  threshold_percentile: 95
+  score_column: outlier_score
+  legacy_score_column: anomaly_score
+  prediction_column: is_outlier
+  normal_class_name: inlier
+  outlier_class_name: outlier
+  vehicle_aggregation:
+    primary_score: max_score
+    additional_scores:
+      - mean_score
+      - p95_score
+      - outlier_window_ratio
+
+evaluation:
+  primary_split: test
+  validation_split: validation
+  primary_level: vehicle
+  secondary_level: window
+  metrics:
+    - precision
+    - recall
+    - f1_score
+    - roc_auc
+    - pr_auc
+  comparison_fields:
+    - model
+    - split
+    - level
+    - threshold
+    - precision
+    - recall
+    - f1_score
+    - roc_auc
+    - pr_auc
+    - training_time_seconds
+    - inference_time_seconds
+    - n_samples
+    - n_outliers

@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import List, Tuple
+
+from pyspark.ml.feature import Imputer, StandardScaler, VectorAssembler
+from pyspark.sql import DataFrame
+from pyspark.sql import functions as F
+
+
+@dataclass
+class PreprocessingMetadata:
+    selected_feature_cols: list[str]
+    dropped_missing_cols: list[str]
+    dropped_constant_cols: list[str]
+    max_missing_ratio: float
+    fill_strategy: str
+    scaler_fit_split: str = "train"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def get_numeric_columns(df: DataFrame, exclude: list[str] | None = None) -> List[str]:
+    """Return numeric columns excluding identifiers and target-like fields."""
+    exclude = set(exclude or [])
+    numeric_types = {"int", "bigint", "double", "float", "long", "short", "decimal"}
+    return [c for c, t in df.dtypes if any(t.startswith(nt) for nt in numeric_types) and c not in exclude]
+
+
+def columns_above_missing_ratio(missing_report, max_missing_ratio: float = 0.8) -> list[str]:
+    """Return columns whose missing ratio is above the configured threshold."""
+    return missing_report.loc[
+        missing_report["missing_ratio"] > max_missing_ratio, "column"
+    ].tolist()
+
+
+def drop_columns_by_missing_ratio(df: DataFrame, missing_report, max_missing_ratio: float = 0.8) -> tuple[DataFrame, list[str]]:
+    """Drop columns whose missing ratio is above the configured threshold."""
+    cols_to_drop = columns_above_missing_ratio(missing_report, max_missing_ratio)
+    return df.drop(*cols_to_drop), cols_to_drop
+
+
+def median_impute(df: DataFrame, input_cols: List[str], suffix: str = "_imputed") -> Tuple[DataFrame, List[str], object]:
+    """Median-impute numeric columns using Spark ML Imputer fitted on the provided split."""
+    output_cols = [f"{c}{suffix}" for c in input_cols]
+    imputer = Imputer(inputCols=input_cols, outputCols=output_cols).setStrategy("median")
+    model = imputer.fit(df)
+    transformed = model.transform(df)
+    return transformed, output_cols, model
+
+
+def apply_imputer(df: DataFrame, imputer_model, input_cols: List[str], suffix: str = "_imputed") -> tuple[DataFrame, List[str]]:
+    """Apply a fitted Spark Imputer model to another split."""
+    output_cols = [f"{c}{suffix}" for c in input_cols]
+    return imputer_model.transform(df), output_cols
+
+
+def assemble_and_scale(
+    df: DataFrame,
+    input_cols: List[str],
+    features_col: str = "features",
+    scaled_col: str = "scaled_features",
+) -> Tuple[DataFrame, VectorAssembler, object]:
+    """Create vector features and fit a standard scaler."""
+    assembler = VectorAssembler(inputCols=input_cols, outputCol=features_col, handleInvalid="keep")
+    assembled = assembler.transform(df)
+
+    scaler = StandardScaler(inputCol=features_col, outputCol=scaled_col, withMean=True, withStd=True)
+    scaler_model = scaler.fit(assembled)
+    scaled = scaler_model.transform(assembled)
+
+    return scaled, assembler, scaler_model
+
+
+def apply_assembler_scaler(
+    df: DataFrame,
+    assembler: VectorAssembler,
+    scaler_model,
+) -> DataFrame:
+    """Apply fitted assembler/scaler to validation or test split."""
+    assembled = assembler.transform(df)
+    return scaler_model.transform(assembled)
+
+
+def order_by_vehicle_time(df: DataFrame, vehicle_col: str = "vehicle_id", time_col: str = "time_step") -> DataFrame:
+    """Sort dataframe by vehicle and time."""
+    return df.orderBy(F.col(vehicle_col), F.col(time_col))
+
+
+def vector_to_array_columns(df: DataFrame, vector_col: str, output_prefix: str = "f") -> tuple[DataFrame, list[str]]:
+    """Convert a Spark vector column into scalar columns for window creation."""
+    from pyspark.ml.functions import vector_to_array
+
+    array_col = f"{vector_col}_array"
+    out = df.withColumn(array_col, vector_to_array(F.col(vector_col)))
+    first = out.select(array_col).head()
+    if first is None:
+        return out.drop(array_col), []
+    n_features = len(first[array_col])
+    feature_cols = [f"{output_prefix}_{i}" for i in range(n_features)]
+    for i, name in enumerate(feature_cols):
+        out = out.withColumn(name, F.col(array_col)[i])
+    return out.drop(array_col), feature_cols
+
+
+def apply_train_fitted_preprocessing(
+    train_df: DataFrame,
+    validation_df: DataFrame,
+    test_df: DataFrame,
+    feature_cols: list[str],
+    missing_report,
+    constant_cols: list[str] | None = None,
+    max_missing_ratio: float = 0.8,
+    vehicle_col: str = "vehicle_id",
+    time_col: str = "time_step",
+    label_col: str = "y_true",
+) -> tuple[DataFrame, DataFrame, DataFrame, list[str], PreprocessingMetadata]:
+    """Apply leakage-safe preprocessing fitted only on train.
+
+    This helper removes columns based on train-only quality checks, fits imputation
+    and scaling on train, and applies the fitted transformations to validation/test.
+    """
+    constant_cols = constant_cols or []
+    missing_cols = [c for c in columns_above_missing_ratio(missing_report, max_missing_ratio) if c in feature_cols]
+    drop_cols = sorted(set(missing_cols + [c for c in constant_cols if c in feature_cols]))
+    selected = [c for c in feature_cols if c not in drop_cols]
+
+    train_base = train_df.drop(*drop_cols)
+    val_base = validation_df.drop(*drop_cols)
+    test_base = test_df.drop(*drop_cols)
+
+    train_imp, imputed_cols, imputer_model = median_impute(train_base, selected)
+    val_imp, _ = apply_imputer(val_base, imputer_model, selected)
+    test_imp, _ = apply_imputer(test_base, imputer_model, selected)
+
+    train_scaled, assembler, scaler_model = assemble_and_scale(train_imp, imputed_cols)
+    val_scaled = apply_assembler_scaler(val_imp, assembler, scaler_model)
+    test_scaled = apply_assembler_scaler(test_imp, assembler, scaler_model)
+
+    train_out, scaled_cols = vector_to_array_columns(train_scaled, "scaled_features", output_prefix="x")
+    val_out, _ = vector_to_array_columns(val_scaled, "scaled_features", output_prefix="x")
+    test_out, _ = vector_to_array_columns(test_scaled, "scaled_features", output_prefix="x")
+
+    keep = [vehicle_col, time_col] + ([label_col] if label_col in train_out.columns else []) + scaled_cols
+    train_out = train_out.select([c for c in keep if c in train_out.columns])
+    val_out = val_out.select([c for c in keep if c in val_out.columns])
+    test_out = test_out.select([c for c in keep if c in test_out.columns])
+
+    metadata = PreprocessingMetadata(
+        selected_feature_cols=scaled_cols,
+        dropped_missing_cols=missing_cols,
+        dropped_constant_cols=[c for c in constant_cols if c in feature_cols],
+        max_missing_ratio=max_missing_ratio,
+        fill_strategy="median",
+    )
+    return train_out, val_out, test_out, scaled_cols, metadata
