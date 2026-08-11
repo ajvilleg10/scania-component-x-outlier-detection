@@ -11,7 +11,12 @@ except Exception:  # pragma: no cover - lets dry-run/tests import without PySpar
 
 
 class ScaniaDataLoader:
-    """Loads SCANIA Component X files using PySpark."""
+    """Loads SCANIA Component X files using PySpark.
+
+    The pipeline expects the CSV files to be persisted in Google Drive under
+    ``paths.raw_dir``. KaggleHub downloads to a temporary Colab cache, so those
+    files must be copied to Drive/data/raw before running the pipeline.
+    """
 
     def __init__(
         self,
@@ -34,6 +39,35 @@ class ScaniaDataLoader:
             file_map=config.get("dataset", {}).get("files", {}),
         )
 
+    def expected_files(self) -> Dict[str, Path]:
+        """Return expected dataset files resolved against the primary raw directory."""
+        return {alias: self.raw_dir / filename for alias, filename in self.file_map.items()}
+
+    def missing_files(self, allow_alternative: bool = False) -> Dict[str, str]:
+        """Return missing files by alias using the configured primary raw directory."""
+        missing: Dict[str, str] = {}
+        for alias, filename in self.file_map.items():
+            primary = self.raw_dir / filename
+            alternative = self.alternative_raw_dir / filename if self.alternative_raw_dir else None
+            exists = primary.exists() or (allow_alternative and alternative is not None and alternative.exists())
+            if not exists:
+                missing[alias] = filename
+        return missing
+
+    def validate_required_files(self, allow_alternative: bool = False) -> None:
+        missing = self.missing_files(allow_alternative=allow_alternative)
+        if missing:
+            missing_text = "\n".join(f"- {alias}: {filename}" for alias, filename in missing.items())
+            raise FileNotFoundError(
+                "Faltan archivos obligatorios del dataset SCANIA Component X en data/raw:\n"
+                f"{missing_text}\n\n"
+                f"Ruta esperada: {self.raw_dir}\n"
+                "KaggleHub descarga inicialmente en /root/.cache/kagglehub/, pero el pipeline no lee desde esa caché.\n"
+                "Ejecute primero:\n"
+                "python scripts/download_kaggle_to_drive.py --config config/config.colab.yaml\n"
+                "python scripts/check_raw_files.py --config config/config.colab.yaml"
+            )
+
     def _resolve(self, filename: str) -> Path:
         candidates = [self.raw_dir / filename]
         if self.alternative_raw_dir is not None:
@@ -44,7 +78,14 @@ class ScaniaDataLoader:
                 return candidate
 
         raise FileNotFoundError(
-            "File not found. Checked: " + ", ".join(str(c) for c in candidates)
+            "No se encontró el archivo requerido del dataset.\n"
+            f"Archivo: {filename}\n"
+            "Rutas revisadas:\n"
+            + "\n".join(f"- {c}" for c in candidates)
+            + "\n\nEl dataset descargado con kagglehub debe copiarse a Google Drive/data/raw antes de ejecutar main.py.\n"
+            "Ejecute:\n"
+            "python scripts/download_kaggle_to_drive.py --config config/config.colab.yaml\n"
+            "python scripts/check_raw_files.py --config config/config.colab.yaml"
         )
 
     def load_csv(self, filename: str, header: bool = True, infer_schema: bool = True) -> DataFrame:
@@ -68,6 +109,6 @@ class ScaniaDataLoader:
         for alias, filename in file_map.items():
             try:
                 loaded[alias] = self.load_csv(filename)
-            except FileNotFoundError:
-                print(f"[WARN] Missing file skipped: {filename}")
+            except FileNotFoundError as exc:
+                print(f"[WARN] Missing file skipped: {filename}. {exc}")
         return loaded

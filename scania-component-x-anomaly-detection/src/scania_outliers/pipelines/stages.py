@@ -64,6 +64,58 @@ class BaseStage:
         return ScaniaDataLoader.from_config(self.ctx.get_spark(), self.config)
 
 
+class CheckDataStage(BaseStage):
+    """Validate that all required CSV files exist in Google Drive/data/raw."""
+
+    def run(self) -> dict[str, Any]:
+        self.log.info("Running raw data validation stage")
+        from pathlib import Path
+
+        raw_dir = Path(self.config["paths"]["raw_dir"])
+        alt_raw = Path(self.config["paths"].get("raw_dir_alternative", ""))
+        files = self.file_map
+        missing = []
+        found = {}
+
+        if not raw_dir.exists():
+            raise FileNotFoundError(
+                f"No existe el directorio raw esperado: {raw_dir}. "
+                "Monte Google Drive y ejecute scripts/create_drive_folders.py."
+            )
+
+        for alias, filename in files.items():
+            primary = raw_dir / filename
+            alternative = alt_raw / filename if alt_raw else None
+            if primary.exists():
+                found[alias] = str(primary)
+            elif alternative and alternative.exists():
+                found[alias] = str(alternative)
+                self.log.warning("%s encontrado en ruta alternativa: %s", alias, alternative)
+            else:
+                missing.append((alias, filename))
+
+        if missing:
+            missing_text = "\n".join(f"- {alias}: {filename}" for alias, filename in missing)
+            raise FileNotFoundError(
+                "Faltan archivos obligatorios en Google Drive/data/raw:\n"
+                f"{missing_text}\n\n"
+                "Ejecute primero:\n"
+                "python scripts/download_kaggle_to_drive.py --config config/config.colab.yaml\n"
+                "python scripts/check_raw_files.py --config config/config.colab.yaml"
+            )
+
+        payload = {
+            "raw_dir": str(raw_dir),
+            "n_files_found": len(found),
+            "files": found,
+            "status": "ok",
+        }
+        manifest_path = self.ctx.artifact_path("manifests", "check_data.json")
+        save_json(payload, manifest_path)
+        self.log.info("Raw data validation completed. Files found: %s", len(found))
+        return payload
+
+
 class EDAStage(BaseStage):
     """Exploratory analysis and quality control stage."""
 

@@ -19,6 +19,7 @@ class ScaniaOutlierPipeline:
         # Lazy import keeps dry-run and CLI help usable even before PySpark is installed.
         if self._stages is None:
             from scania_outliers.pipelines.stages import (
+                CheckDataStage,
                 ComparisonStage,
                 EDAStage,
                 EvaluationStage,
@@ -26,6 +27,7 @@ class ScaniaOutlierPipeline:
                 TrainingStage,
             )
             self._stages = {
+                "check-data": CheckDataStage(self.ctx),
                 "eda": EDAStage(self.ctx),
                 "preprocess": PreprocessingWindowingStage(self.ctx),
                 "train": TrainingStage(self.ctx),
@@ -49,7 +51,7 @@ class ScaniaOutlierPipeline:
     def run(self, stage: str = "all", model: str = "all") -> dict[str, Any]:
         if stage == "all":
             outputs = {}
-            for stage_name in ["eda", "preprocess", "train", "evaluate", "compare"]:
+            for stage_name in ["check-data", "eda", "preprocess", "train", "evaluate", "compare"]:
                 outputs[stage_name] = self.run(stage=stage_name, model=model)
             return outputs
 

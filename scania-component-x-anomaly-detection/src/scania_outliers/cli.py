@@ -7,7 +7,7 @@ from pathlib import Path
 from scania_outliers.config import load_config
 from scania_outliers.pipelines.orchestrator import ScaniaOutlierPipeline
 
-VALID_STAGES = ["all", "eda", "preprocess", "train", "evaluate", "compare"]
+VALID_STAGES = ["all", "check-data", "eda", "preprocess", "train", "evaluate", "compare"]
 VALID_MODELS = ["all", "lstm_autoencoder", "cnn_lstm_autoencoder", "transformer_encoder_simplified"]
 
 

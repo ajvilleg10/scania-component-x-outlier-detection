@@ -25,6 +25,7 @@ paths:
   tables_dir: /content/drive/MyDrive/TFM_SCANIA/outputs/tables
   metrics_dir: /content/drive/MyDrive/TFM_SCANIA/outputs/metrics
   doc_dir: /content/drive/MyDrive/TFM_SCANIA/doc
+  experiments_dir: /content/drive/MyDrive/TFM_SCANIA/experiments
 dataset:
   vehicle_col: vehicle_id
   time_col: time_step
@@ -65,6 +66,12 @@ dataset:
     additional_train_split: false
     reason: SCANIA Component X ya proporciona train, validation y test; se respeta
       la particion oficial.
+  kaggle:
+    dataset_slug: tapanbatla/scania-component-x-dataset-2025
+    download_cache: kagglehub_default_cache
+    copy_to_raw_dir_required: true
+    note: KaggleHub descarga en cache temporal de Colab; los CSV deben copiarse a
+      paths.raw_dir antes de ejecutar el pipeline.
 spark:
   app_name: ScaniaComponentXOutlierDetection
   master: local[*]

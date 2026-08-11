@@ -32,6 +32,7 @@ El pipeline respeta las decisiones metodológicas finales del TFM:
 8. La evaluación principal se reporta a nivel vehículo/trayectoria.
 9. La evaluación por ventana se conserva como análisis secundario para interpretar la evolución temporal de los scores.
 10. Los notebooks no son pasos manuales obligatorios; el flujo oficial se ejecuta desde `main.py`.
+11. El dataset descargado con KaggleHub debe copiarse a `Google Drive/data/raw` antes de ejecutar el pipeline.
 
 ---
 
@@ -51,6 +52,8 @@ Flujo lógico:
 
 ```text
 data/raw
+   ↓
+validación de archivos requeridos
    ↓
 EDA y calidad de datos
    ↓
@@ -95,6 +98,8 @@ scania-component-x-outlier-detection-final-colab/
 ├── scripts/
 │   ├── check_environment.py
 │   ├── create_drive_folders.py
+│   ├── download_kaggle_to_drive.py
+│   ├── check_raw_files.py
 │   └── compare_metrics.py
 │
 ├── src/
@@ -129,13 +134,6 @@ scania-component-x-outlier-detection-final-colab/
 │   └── diagrams/
 │
 └── tests/
-    ├── test_cli.py
-    ├── test_labels.py
-    ├── test_windowing.py
-    ├── test_model_evaluation.py
-    ├── test_outlier_detection.py
-    ├── test_model_factory.py
-    └── test_vehicle_level.py
 ```
 
 ---
@@ -172,11 +170,7 @@ Ruta principal esperada por el proyecto:
 /content/drive/MyDrive/TFM_SCANIA/data/raw
 ```
 
-También se mantiene compatibilidad con una ruta alternativa heredada:
-
-```text
-/content/drive/MyDrive/TFM_SCANIA/raw
-```
+El pipeline no lee directamente desde la caché temporal de KaggleHub.
 
 ---
 
@@ -222,7 +216,6 @@ Si se clona desde GitHub:
 
 ```bash
 !pip install -r requirements.txt
-!pip install -e .
 ```
 
 Si PySpark requiere Java:
@@ -235,37 +228,86 @@ Si PySpark requiere Java:
 
 ---
 
-## 7. Validación inicial
+## 7. Descarga del dataset desde Kaggle
 
-Validar entorno y rutas:
+El dataset se descarga con `kagglehub`:
 
-```bash
-python scripts/check_environment.py --config config/config.colab.yaml
+```python
+import kagglehub
+path = kagglehub.dataset_download("tapanbatla/scania-component-x-dataset-2025")
 ```
 
-Crear carpetas necesarias en Drive:
+Sin embargo, KaggleHub lo almacena primero en la caché temporal de Colab, normalmente bajo:
 
-```bash
-python scripts/create_drive_folders.py --config config/config.colab.yaml
+```text
+/root/.cache/kagglehub/datasets/...
 ```
 
-Validar configuración sin ejecutar procesos pesados:
+Esa ruta no es persistente y no corresponde a la estructura del proyecto. Por eso, antes de ejecutar `main.py`, los CSV deben copiarse obligatoriamente a:
+
+```text
+/content/drive/MyDrive/TFM_SCANIA/data/raw
+```
+
+Para hacerlo automáticamente, ejecute:
 
 ```bash
-python main.py \
-  --config config/config.colab.yaml \
-  --stage all \
-  --model all \
-  --dry-run
+python scripts/download_kaggle_to_drive.py \
+  --config config/config.colab.yaml
+```
+
+O indicando explícitamente dataset y destino:
+
+```bash
+python scripts/download_kaggle_to_drive.py \
+  --dataset tapanbatla/scania-component-x-dataset-2025 \
+  --raw-dir /content/drive/MyDrive/TFM_SCANIA/data/raw
+```
+
+Después valide que todos los archivos requeridos estén disponibles:
+
+```bash
+python scripts/check_raw_files.py \
+  --config config/config.colab.yaml
 ```
 
 ---
 
 ## 8. Ejecución rápida
 
-### 8.1 Modo debug
+### 8.1 Crear carpetas en Drive
 
-Ejecuta el pipeline con un subconjunto de vehículos. Sirve para verificar que el flujo funcione antes de lanzar el entrenamiento completo.
+```bash
+python scripts/create_drive_folders.py \
+  --config config/config.colab.yaml
+```
+
+### 8.2 Descargar/copiar dataset a Drive/raw
+
+```bash
+python scripts/download_kaggle_to_drive.py \
+  --config config/config.colab.yaml
+```
+
+### 8.3 Validar archivos raw
+
+```bash
+python scripts/check_raw_files.py \
+  --config config/config.colab.yaml
+```
+
+### 8.4 Validar pipeline sin procesos pesados
+
+```bash
+python main.py \
+  --config config/config.colab.yaml \
+  --stage all \
+  --model all \
+  --mode debug \
+  --dry-run
+```
+
+### 8.5 Ejecutar prueba en modo debug
 
 ```bash
 python main.py \
@@ -275,9 +317,7 @@ python main.py \
   --mode debug
 ```
 
-### 8.2 Modo full
-
-Ejecuta el pipeline completo para generar resultados finales del TFM.
+### 8.6 Ejecutar experimento final
 
 ```bash
 python main.py \
@@ -289,52 +329,55 @@ python main.py \
 
 ---
 
-## 9. Ejecución por etapas recomendada
+## 9. Ejecución por etapas
 
-Para evitar pérdida de trabajo por desconexiones de Colab, se recomienda ejecutar por etapas. Cada etapa guarda artefactos en Google Drive.
+Si Colab se desconecta o se desea controlar mejor el proceso, se recomienda ejecutar por etapas.
 
-### 9.1 EDA
+### Validar datos
+
+```bash
+python main.py --config config/config.colab.yaml --stage check-data --mode full
+```
+
+### EDA
 
 ```bash
 python main.py --config config/config.colab.yaml --stage eda --mode full
 ```
 
-### 9.2 Preprocesamiento y construcción de ventanas
+### Preprocesamiento y windowing
 
 ```bash
 python main.py --config config/config.colab.yaml --stage preprocess --mode full
 ```
 
-Esta etapa genera:
-
-```text
-TFM_SCANIA/data/processed/train_windows.npz
-TFM_SCANIA/data/processed/validation_windows.npz
-TFM_SCANIA/data/processed/test_windows.npz
-TFM_SCANIA/outputs/runs/<run_id>/manifests/preprocessing_metadata.json
-```
-
-### 9.3 Entrenar todos los modelos
+### Entrenar modelos
 
 ```bash
 python main.py --config config/config.colab.yaml --stage train --model all --mode full
 ```
 
-### 9.4 Entrenar un modelo específico
+Entrenar un solo modelo:
 
 ```bash
 python main.py --config config/config.colab.yaml --stage train --model lstm_autoencoder --mode full
+```
+
+```bash
 python main.py --config config/config.colab.yaml --stage train --model cnn_lstm_autoencoder --mode full
+```
+
+```bash
 python main.py --config config/config.colab.yaml --stage train --model transformer_encoder_simplified --mode full
 ```
 
-### 9.5 Evaluar todos los modelos
+### Evaluar
 
 ```bash
 python main.py --config config/config.colab.yaml --stage evaluate --model all --mode full
 ```
 
-### 9.6 Consolidar comparación final
+### Comparar
 
 ```bash
 python main.py --config config/config.colab.yaml --stage compare --mode full
@@ -342,112 +385,85 @@ python main.py --config config/config.colab.yaml --stage compare --mode full
 
 ---
 
-## 10. Comandos finales recomendados para el TFM
+## 10. Comando recomendado real en Colab
+
+En la práctica, se recomienda ejecutar:
 
 ```bash
-python main.py --config config/config.colab.yaml --stage eda --mode full
-python main.py --config config/config.colab.yaml --stage preprocess --mode full
-python main.py --config config/config.colab.yaml --stage train --model lstm_autoencoder --mode full
-python main.py --config config/config.colab.yaml --stage train --model cnn_lstm_autoencoder --mode full
-python main.py --config config/config.colab.yaml --stage train --model transformer_encoder_simplified --mode full
-python main.py --config config/config.colab.yaml --stage evaluate --model all --mode full
-python main.py --config config/config.colab.yaml --stage compare --mode full
+python scripts/create_drive_folders.py --config config/config.colab.yaml
+python scripts/download_kaggle_to_drive.py --config config/config.colab.yaml
+python scripts/check_raw_files.py --config config/config.colab.yaml
+python main.py --config config/config.colab.yaml --stage all --model all --mode debug
 ```
 
----
-
-## 11. Salidas generadas
-
-```text
-TFM_SCANIA/
-├── data/processed/
-│   ├── train_windows.npz
-│   ├── validation_windows.npz
-│   └── test_windows.npz
-├── models/
-│   ├── lstm_autoencoder/model.pt
-│   ├── cnn_lstm_autoencoder/model.pt
-│   └── transformer_encoder_simplified/model.pt
-└── outputs/
-    ├── metrics/
-    ├── predictions/
-    ├── figures/
-    ├── tables/
-    └── runs/<run_id>/manifests/
-```
-
----
-
-## 12. Evaluación
-
-La evaluación se realiza en dos niveles.
-
-### 12.1 Nivel ventana
-
-```text
-vehicle_id
-start_time
-end_time
-outlier_score
-is_outlier
-y_true
-```
-
-Este nivel sirve para analizar la evolución temporal de los scores.
-
-### 12.2 Nivel vehículo/trayectoria
-
-```text
-vehicle_id
-y_true
-max_score
-mean_score
-p95_score
-outlier_window_ratio
-is_outlier
-```
-
-Este es el nivel principal para reportar resultados cuando las etiquetas disponibles se encuentran asociadas al vehículo o trayectoria.
-
-Métricas consideradas:
-
-- Precision
-- Recall
-- F1-score
-- ROC-AUC
-- PR-AUC
-
----
-
-## 13. Pruebas
-
-Ejecutar pruebas unitarias:
+Si todo funciona correctamente:
 
 ```bash
-pytest
+python main.py --config config/config.colab.yaml --stage all --model all --mode full
 ```
 
 ---
 
-## 14. Limitaciones metodológicas
-
-- La evaluación depende de la granularidad de las etiquetas disponibles.
-- Si las etiquetas están a nivel vehículo, las métricas por ventana deben interpretarse solo como apoyo exploratorio.
-- Si por restricciones de Colab se trabaja con una muestra, debe documentarse el número de vehículos y el criterio de selección.
-- El Transformer Encoder se implementa en versión simplificada para mantener el alcance viable del TFM.
-- No se realizan nuevas particiones ni validación cruzada porque se respetan los conjuntos oficiales del dataset.
-
----
-
-## 15. Resumen operativo
+## 11. Salidas esperadas
 
 ```text
-1. Subir CSV a Drive/data/raw
-2. Montar Drive en Colab
-3. Instalar dependencias
-4. Validar entorno
-5. Ejecutar debug
-6. Ejecutar full por etapas
-7. Revisar outputs/metrics y outputs/predictions
-8. Usar notebooks solo para visualización y defensa
+/content/drive/MyDrive/TFM_SCANIA/data/processed/
+/content/drive/MyDrive/TFM_SCANIA/models/
+/content/drive/MyDrive/TFM_SCANIA/outputs/
+/content/drive/MyDrive/TFM_SCANIA/experiments/
 ```
+
+Resultados principales:
+
+```text
+outputs/metrics/
+outputs/predictions/
+outputs/comparisons/
+outputs/figures/
+outputs/runs/<run_id>/manifests/
+```
+
+---
+
+## 12. Notebooks
+
+Los notebooks no son el flujo oficial de ejecución. Se usan para:
+
+- montar Drive desde Colab;
+- lanzar comandos del pipeline;
+- visualizar resultados;
+- generar figuras para el TFM;
+- apoyar la defensa.
+
+El notebook principal es:
+
+```text
+notebooks/00_run_full_pipeline_colab.ipynb
+```
+
+---
+
+## 13. Consideraciones importantes
+
+- No modificar manualmente las particiones oficiales del dataset.
+- No mezclar `train`, `validation` y `test`.
+- No ajustar el escalador ni la imputación con `validation` o `test`.
+- No seleccionar umbral con `test`.
+- No evaluar resultados finales con `validation`.
+- No leer los CSV desde `/root/.cache/kagglehub/`.
+- Copiar siempre los CSV a `Drive/data/raw` antes de ejecutar `main.py`.
+- Reportar resultados finales únicamente con `test`.
+
+---
+
+## 14. Pruebas
+
+```bash
+pytest -q
+```
+
+---
+
+## 15. Licencia
+
+Uso académico para el desarrollo del TFM.
