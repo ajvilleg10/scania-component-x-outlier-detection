@@ -1,6 +1,6 @@
 import numpy as np
 
-from scania_anomaly.model_evaluation import binary_classification_metrics
+from scania_outliers.model_evaluation import binary_classification_metrics
 
 
 def test_binary_metrics_ignore_unlabeled_rows():

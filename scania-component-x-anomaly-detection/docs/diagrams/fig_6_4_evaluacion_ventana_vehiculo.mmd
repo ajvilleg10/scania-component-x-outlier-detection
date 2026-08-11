@@ -1,0 +1,22 @@
+flowchart TD
+    A[Ventanas temporales multivariadas] --> B[Modelo entrenado]
+    B --> C[Reconstrucción o representación aprendida]
+    C --> D[Outlier score por ventana]
+
+    D --> E[Análisis secundario por ventana]
+    D --> F[Agregación por vehículo/trayectoria]
+
+    F --> G1[max_score]
+    F --> G2[mean_score]
+    F --> G3[p95_score]
+    F --> G4[outlier_window_ratio]
+
+    G1 --> H[Score agregado principal]
+    G2 --> H
+    G3 --> H
+    G4 --> H
+
+    H --> I[Umbral seleccionado con validation]
+    I --> J[Predicción final por vehículo]
+    J --> K[Comparación con class_label en test]
+    K --> L[Métricas finales]

@@ -1,144 +1,453 @@
-# SCANIA Component X · Detección de outliers temporales multivariados
+# SCANIA Component X - Detección de outliers temporales multivariados
 
-Proyecto de Trabajo de Fin de Máster orientado a la **detección de outliers temporales multivariados** en lecturas operacionales de componentes de motores de vehículos pesados, dentro de un contexto de **mantenimiento predictivo**.
+Proyecto automatizado para el TFM **Detección de outliers en series temporales multivariadas para mantenimiento predictivo en vehículos pesados**.
 
-El repositorio está preparado para trabajar con **GitHub + Google Colab + Google Drive**. El código fuente se versiona en GitHub, mientras que los datos pesados, ventanas generadas, checkpoints y salidas experimentales se almacenan en Google Drive.
+El proyecto está diseñado para ejecutarse principalmente en **Google Colab conectado a Google Drive**, aprovechando GPU para el entrenamiento de modelos de aprendizaje profundo. Los notebooks quedan como apoyo explicativo, de visualización y defensa; la ejecución oficial se realiza mediante `main.py`.
 
-> Nota terminológica: en el código pueden aparecer nombres como `anomaly_score` por compatibilidad con la literatura técnica de *anomaly detection*. En el documento del TFM y en la documentación visible se prioriza el término **outlier** y la expresión **puntuación de atipicidad**.
+---
 
-## Alcance experimental
+## 1. Objetivo del proyecto
 
-El proyecto se centra en tres modelos principales:
+Implementar un pipeline reproducible para detectar **outliers temporales multivariados** en lecturas operacionales del dataset **SCANIA Component X**, comparando tres modelos de aprendizaje profundo:
 
-1. **LSTM Autoencoder**: modelo base para representar trayectorias operacionales frecuentes y detectar desviaciones mediante error de reconstrucción.
-2. **CNN-LSTM Autoencoder**: modelo híbrido orientado a capturar patrones locales y dependencias temporales.
-3. **Transformer Encoder simplificado**: arquitectura controlada basada en atención para estudiar relaciones temporales de mayor alcance.
+- `lstm_autoencoder`
+- `cnn_lstm_autoencoder`
+- `transformer_encoder_simplified`
 
-Modelos como USAD, Anomaly Transformer, MTAD-GAT, OmniAnomaly y TimesNet se mantienen como soporte del estado del arte o líneas futuras, salvo que el cronograma permita una implementación adicional estable.
+Los modelos generan una **puntuación de atipicidad** u `outlier_score` por ventana temporal. La evaluación principal se realiza a nivel **vehículo/trayectoria**, agregando los scores de ventana y comparándolos con las etiquetas disponibles (`class_label`) cuando corresponda.
 
-## Estructura del repositorio
+---
 
-```text
-scania-component-x-outlier-detection/
-├── config/                         # Configuración central del proyecto
-├── notebooks/                      # Notebooks ejecutables en Colab
-├── scripts/                        # Ejecuciones reproducibles por línea de comandos
-├── src/scania_anomaly/             # Código reutilizable del proyecto
-├── tests/                          # Pruebas mínimas de componentes críticos
-├── data/                           # Marcadores; los datos reales van en Drive
-├── models/                         # Marcadores; checkpoints reales van en Drive
-├── reports/                        # Marcadores; resultados reales van en Drive
-└── docs/                           # Documentación metodológica y operativa
-```
+## 2. Principios metodológicos implementados
 
-## Estructura esperada en Google Drive
+El pipeline respeta las decisiones metodológicas finales del TFM:
 
-```text
-/content/drive/MyDrive/TFM_SCANIA/
-├── raw/
-│   ├── train_operational_readouts.csv
-│   ├── train_tte.csv
-│   ├── train_specifications.csv
-│   ├── validation_operational_readouts.csv
-│   ├── validation_labels.csv
-│   ├── validation_specifications.csv
-│   ├── test_operational_readouts.csv
-│   ├── test_labels.csv
-│   └── test_specifications.csv
-├── processed/
-│   ├── preprocessing_metadata.json
-│   ├── train_windows.npz
-│   ├── validation_windows.npz
-│   └── test_windows.npz
-├── models/
-├── outputs/
-│   ├── metrics/
-│   ├── tables/
-│   └── figures/
-└── doc/
-```
+1. El dataset ya proporciona particiones oficiales de `train`, `validation` y `test`.
+2. No se realiza una nueva división aleatoria del dataset.
+3. No se aplica validación cruzada.
+4. `train` se usa para ajustar el preprocesamiento y entrenar modelos.
+5. `validation` se usa para controlar entrenamiento, seleccionar hiperparámetros y ajustar el umbral de atipicidad.
+6. `test` se reserva exclusivamente para la evaluación final.
+7. El preprocesamiento se ajusta solo con `train` y luego se aplica a `validation` y `test`.
+8. La evaluación principal se reporta a nivel vehículo/trayectoria.
+9. La evaluación por ventana se conserva como análisis secundario para interpretar la evolución temporal de los scores.
+10. Los notebooks no son pasos manuales obligatorios; el flujo oficial se ejecuta desde `main.py`.
 
-También se soporta la ruta alternativa:
+---
+
+## 3. Arquitectura general
 
 ```text
-/content/drive/MyDrive/TFM_SCANIA/data/raw/Dataset/
+Google Drive                                      Google Colab GPU
+TFM_SCANIA/                                       main.py
+├── data/raw/       ───────────────────────►     ScaniaOutlierPipeline
+├── data/processed/ ◄───────────────────────     EDA + Preprocessing + Windowing
+├── models/         ◄───────────────────────     Training
+├── outputs/        ◄───────────────────────     Evaluation + Comparison
+└── doc/            ◄───────────────────────     Reportes, anexos y defensa
 ```
 
-## Flujo metodológico
+Flujo lógico:
 
 ```text
-01 EDA y calidad de datos con PySpark
+data/raw
    ↓
-02 Preprocesamiento ajustado solo con train
+EDA y calidad de datos
    ↓
-03 Construcción de ventanas temporales multivariadas
+preprocesamiento ajustado solo con train
    ↓
-04 Entrenamiento LSTM Autoencoder
+construcción de ventanas temporales
    ↓
-05 Entrenamiento CNN-LSTM Autoencoder
+entrenamiento de modelos en Colab GPU
    ↓
-06 Entrenamiento Transformer Encoder simplificado
+cálculo de outlier scores
    ↓
-07 Agregación de puntuaciones por vehículo/trayectoria
+ajuste de umbral con validation
    ↓
-08 Comparación final sobre test
+evaluación final con test
+   ↓
+outputs, métricas, predicciones y modelos guardados en Drive
 ```
 
-La regla experimental principal es:
+---
 
-- **Train**: ajuste de parámetros de preprocesamiento y entrenamiento de modelos.
-- **Holdout interno de train**: validación de pérdida y early stopping.
-- **Validation**: selección de umbral e hiperparámetros.
-- **Test**: evaluación final y reporte de métricas definitivas.
-
-## Evaluación principal
-
-Las etiquetas disponibles en `validation_labels.csv` y `test_labels.csv` se manejan como referencias a nivel de vehículo mediante la columna `class_label`. Por ello, la evaluación principal se realiza a nivel de **vehículo/trayectoria**:
+## 4. Estructura del repositorio
 
 ```text
-Ventanas temporales → puntuación de atipicidad por ventana → agregación por vehículo → comparación con class_label
+scania-component-x-outlier-detection-final-colab/
+│
+├── main.py
+├── requirements.txt
+├── pyproject.toml
+├── README.md
+│
+├── config/
+│   ├── config.colab.yaml
+│   ├── config.debug.yaml
+│   └── config.full.yaml
+│
+├── notebooks/
+│   ├── 00_run_full_pipeline_colab.ipynb
+│   ├── 01_exploratory_analysis.ipynb
+│   ├── 02_visual_results.ipynb
+│   └── 03_model_interpretation.ipynb
+│
+├── scripts/
+│   ├── check_environment.py
+│   ├── create_drive_folders.py
+│   └── compare_metrics.py
+│
+├── src/
+│   └── scania_outliers/
+│       ├── cli.py
+│       ├── config.py
+│       ├── data_loader.py
+│       ├── data_quality.py
+│       ├── labels.py
+│       ├── preprocessing.py
+│       ├── windowing.py
+│       ├── outlier_detection.py
+│       ├── vehicle_level.py
+│       ├── model_factory.py
+│       ├── model_evaluation.py
+│       ├── temporal_analysis.py
+│       ├── pipelines/
+│       │   ├── context.py
+│       │   ├── orchestrator.py
+│       │   └── stages.py
+│       ├── models/
+│       │   └── autoencoders.py
+│       ├── training/
+│       │   └── trainer.py
+│       └── utils/
+│           └── reproducibility.py
+│
+├── docs/
+│   ├── architecture.md
+│   ├── methodology.md
+│   ├── execution_guide_colab.md
+│   └── diagrams/
+│
+└── tests/
+    ├── test_cli.py
+    ├── test_labels.py
+    ├── test_windowing.py
+    ├── test_model_evaluation.py
+    ├── test_outlier_detection.py
+    ├── test_model_factory.py
+    └── test_vehicle_level.py
 ```
 
-Las métricas por ventana se conservan como análisis exploratorio cuando resulte metodológicamente pertinente.
+---
 
-## Ejecución en Google Colab
+## 5. Estructura esperada en Google Drive
+
+Crear la siguiente estructura en Drive:
+
+```text
+MyDrive/
+└── TFM_SCANIA/
+    ├── data/
+    │   ├── raw/
+    │   │   ├── train_operational_readouts.csv
+    │   │   ├── train_tte.csv
+    │   │   ├── train_specifications.csv
+    │   │   ├── validation_operational_readouts.csv
+    │   │   ├── validation_labels.csv
+    │   │   ├── validation_specifications.csv
+    │   │   ├── test_operational_readouts.csv
+    │   │   ├── test_labels.csv
+    │   │   └── test_specifications.csv
+    │   ├── processed/
+    │   └── samples/
+    ├── models/
+    ├── outputs/
+    ├── experiments/
+    └── doc/
+```
+
+Ruta principal esperada por el proyecto:
+
+```text
+/content/drive/MyDrive/TFM_SCANIA/data/raw
+```
+
+También se mantiene compatibilidad con una ruta alternativa heredada:
+
+```text
+/content/drive/MyDrive/TFM_SCANIA/raw
+```
+
+---
+
+## 6. Preparación en Google Colab
+
+### 6.1 Activar GPU
+
+En Colab:
+
+```text
+Entorno de ejecución → Cambiar tipo de entorno de ejecución → GPU
+```
+
+Verificar GPU:
+
+```bash
+!nvidia-smi
+```
+
+### 6.2 Montar Google Drive
 
 ```python
 from google.colab import drive
 drive.mount('/content/drive')
+```
 
-!git clone https://github.com/TU_USUARIO/scania-component-x-outlier-detection.git
-%cd scania-component-x-outlier-detection
+### 6.3 Ir al proyecto
+
+Si el proyecto está guardado en Drive:
+
+```bash
+%cd /content/drive/MyDrive/TFM_SCANIA/project/scania-component-x-outlier-detection-final-colab
+```
+
+Si se clona desde GitHub:
+
+```bash
+!git clone https://github.com/USUARIO/scania-component-x-outlier-detection-final-colab.git /content/scania-component-x-outlier-detection-final-colab
+%cd /content/scania-component-x-outlier-detection-final-colab
+```
+
+### 6.4 Instalar dependencias
+
+```bash
+!pip install -r requirements.txt
 !pip install -e .
 ```
 
-Luego ejecutar los notebooks en orden.
+Si PySpark requiere Java:
 
-## Modos de ejecución
-
-El archivo `config/config.yaml` incluye un modo de ejecución:
-
-```yaml
-execution:
-  mode: debug   # debug | full
+```bash
+!apt-get update -qq
+!apt-get install -y openjdk-11-jdk-headless -qq
+!pip install pyspark
 ```
 
-- `debug`: usa un subconjunto acotado de vehículos para validar el pipeline.
-- `full`: ejecuta los experimentos finales con el conjunto completo disponible.
+---
 
-Si por restricciones computacionales se reportan resultados con una muestra, se debe documentar explícitamente el criterio de selección, número de vehículos y limitaciones.
+## 7. Validación inicial
 
-## Buenas prácticas aplicadas
+Validar entorno y rutas:
 
-- Separación entre notebooks, código fuente, configuración, documentación y resultados.
-- No versionar CSV pesados, ventanas `.npz`, checkpoints ni salidas generadas.
-- Configuración centralizada en `config/config.yaml`.
-- Ajuste de imputación, escalado y selección de variables solo con `train`.
-- Separación entre `train`, `validation` y `test` para evitar fuga de información.
-- Evaluación principal a nivel vehículo/trayectoria cuando las etiquetas estén a ese nivel.
-- Registro de métricas, predicciones, metadatos y configuración por experimento.
-- Pruebas mínimas para windowing, etiquetas, métricas, umbrales y agregación por vehículo.
+```bash
+python scripts/check_environment.py --config config/config.colab.yaml
+```
 
-## Nota sobre alcance
+Crear carpetas necesarias en Drive:
 
-El repositorio está diseñado para evolucionar con el avance del TFM. Si el Transformer Encoder simplificado no entrega resultados estables dentro del cronograma, se recomienda priorizar una comparación rigurosa entre LSTM Autoencoder y CNN-LSTM Autoencoder, documentando el enfoque basado en atención como línea complementaria o futura.
+```bash
+python scripts/create_drive_folders.py --config config/config.colab.yaml
+```
+
+Validar configuración sin ejecutar procesos pesados:
+
+```bash
+python main.py \
+  --config config/config.colab.yaml \
+  --stage all \
+  --model all \
+  --dry-run
+```
+
+---
+
+## 8. Ejecución rápida
+
+### 8.1 Modo debug
+
+Ejecuta el pipeline con un subconjunto de vehículos. Sirve para verificar que el flujo funcione antes de lanzar el entrenamiento completo.
+
+```bash
+python main.py \
+  --config config/config.colab.yaml \
+  --stage all \
+  --model all \
+  --mode debug
+```
+
+### 8.2 Modo full
+
+Ejecuta el pipeline completo para generar resultados finales del TFM.
+
+```bash
+python main.py \
+  --config config/config.colab.yaml \
+  --stage all \
+  --model all \
+  --mode full
+```
+
+---
+
+## 9. Ejecución por etapas recomendada
+
+Para evitar pérdida de trabajo por desconexiones de Colab, se recomienda ejecutar por etapas. Cada etapa guarda artefactos en Google Drive.
+
+### 9.1 EDA
+
+```bash
+python main.py --config config/config.colab.yaml --stage eda --mode full
+```
+
+### 9.2 Preprocesamiento y construcción de ventanas
+
+```bash
+python main.py --config config/config.colab.yaml --stage preprocess --mode full
+```
+
+Esta etapa genera:
+
+```text
+TFM_SCANIA/data/processed/train_windows.npz
+TFM_SCANIA/data/processed/validation_windows.npz
+TFM_SCANIA/data/processed/test_windows.npz
+TFM_SCANIA/outputs/runs/<run_id>/manifests/preprocessing_metadata.json
+```
+
+### 9.3 Entrenar todos los modelos
+
+```bash
+python main.py --config config/config.colab.yaml --stage train --model all --mode full
+```
+
+### 9.4 Entrenar un modelo específico
+
+```bash
+python main.py --config config/config.colab.yaml --stage train --model lstm_autoencoder --mode full
+python main.py --config config/config.colab.yaml --stage train --model cnn_lstm_autoencoder --mode full
+python main.py --config config/config.colab.yaml --stage train --model transformer_encoder_simplified --mode full
+```
+
+### 9.5 Evaluar todos los modelos
+
+```bash
+python main.py --config config/config.colab.yaml --stage evaluate --model all --mode full
+```
+
+### 9.6 Consolidar comparación final
+
+```bash
+python main.py --config config/config.colab.yaml --stage compare --mode full
+```
+
+---
+
+## 10. Comandos finales recomendados para el TFM
+
+```bash
+python main.py --config config/config.colab.yaml --stage eda --mode full
+python main.py --config config/config.colab.yaml --stage preprocess --mode full
+python main.py --config config/config.colab.yaml --stage train --model lstm_autoencoder --mode full
+python main.py --config config/config.colab.yaml --stage train --model cnn_lstm_autoencoder --mode full
+python main.py --config config/config.colab.yaml --stage train --model transformer_encoder_simplified --mode full
+python main.py --config config/config.colab.yaml --stage evaluate --model all --mode full
+python main.py --config config/config.colab.yaml --stage compare --mode full
+```
+
+---
+
+## 11. Salidas generadas
+
+```text
+TFM_SCANIA/
+├── data/processed/
+│   ├── train_windows.npz
+│   ├── validation_windows.npz
+│   └── test_windows.npz
+├── models/
+│   ├── lstm_autoencoder/model.pt
+│   ├── cnn_lstm_autoencoder/model.pt
+│   └── transformer_encoder_simplified/model.pt
+└── outputs/
+    ├── metrics/
+    ├── predictions/
+    ├── figures/
+    ├── tables/
+    └── runs/<run_id>/manifests/
+```
+
+---
+
+## 12. Evaluación
+
+La evaluación se realiza en dos niveles.
+
+### 12.1 Nivel ventana
+
+```text
+vehicle_id
+start_time
+end_time
+outlier_score
+is_outlier
+y_true
+```
+
+Este nivel sirve para analizar la evolución temporal de los scores.
+
+### 12.2 Nivel vehículo/trayectoria
+
+```text
+vehicle_id
+y_true
+max_score
+mean_score
+p95_score
+outlier_window_ratio
+is_outlier
+```
+
+Este es el nivel principal para reportar resultados cuando las etiquetas disponibles se encuentran asociadas al vehículo o trayectoria.
+
+Métricas consideradas:
+
+- Precision
+- Recall
+- F1-score
+- ROC-AUC
+- PR-AUC
+
+---
+
+## 13. Pruebas
+
+Ejecutar pruebas unitarias:
+
+```bash
+pytest
+```
+
+---
+
+## 14. Limitaciones metodológicas
+
+- La evaluación depende de la granularidad de las etiquetas disponibles.
+- Si las etiquetas están a nivel vehículo, las métricas por ventana deben interpretarse solo como apoyo exploratorio.
+- Si por restricciones de Colab se trabaja con una muestra, debe documentarse el número de vehículos y el criterio de selección.
+- El Transformer Encoder se implementa en versión simplificada para mantener el alcance viable del TFM.
+- No se realizan nuevas particiones ni validación cruzada porque se respetan los conjuntos oficiales del dataset.
+
+---
+
+## 15. Resumen operativo
+
+```text
+1. Subir CSV a Drive/data/raw
+2. Montar Drive en Colab
+3. Instalar dependencias
+4. Validar entorno
+5. Ejecutar debug
+6. Ejecutar full por etapas
+7. Revisar outputs/metrics y outputs/predictions
+8. Usar notebooks solo para visualización y defensa
+```

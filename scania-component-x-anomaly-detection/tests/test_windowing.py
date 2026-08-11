@@ -1,6 +1,6 @@
 import pandas as pd
 
-from scania_anomaly.windowing import TimeWindowBuilder
+from scania_outliers.windowing import TimeWindowBuilder
 
 
 def test_windowing_builds_expected_shape_with_vehicle_label_policy():

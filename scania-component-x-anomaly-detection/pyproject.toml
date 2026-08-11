@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "scania-outlier"
-version = "1.0.0"
+name = "scania-component-x-outliers"
+version = "1.1.0"
 description = "Detección de outliers temporales multivariados del dataset SCANIA Component X"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,3 +31,6 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-q"
+
+[project.scripts]
+scania-outliers = "scania_outliers.cli:main"

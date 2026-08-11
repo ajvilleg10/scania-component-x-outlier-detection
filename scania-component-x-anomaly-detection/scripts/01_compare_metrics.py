@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scania_anomaly.config import load_config
+from scania_outliers.config import load_config
 
 
 def main() -> None:

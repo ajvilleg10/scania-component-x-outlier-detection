@@ -1,0 +1,9 @@
+flowchart TD
+    A[data/raw en Google Drive] --> B[EDA y calidad]
+    B --> C[Preprocesamiento sin fuga]
+    C --> D[Ventanas temporales]
+    D --> E[Entrenamiento]
+    E --> F[Outlier scores]
+    F --> G[Umbral en validation]
+    G --> H[Evaluación en test]
+    H --> I[Comparación final]

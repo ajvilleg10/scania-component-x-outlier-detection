@@ -1,0 +1,26 @@
+flowchart LR
+    subgraph DRIVE[Google Drive - TFM_SCANIA]
+        RAW[data/raw: CSV originales]
+        PROCESSED[data/processed: datos limpios y ventanas]
+        MODELS[models: checkpoints]
+        OUTPUTS[outputs: métricas, predicciones y figuras]
+        DOC[doc: documento, anexos y defensa]
+        EXP[experiments: runs y manifiestos]
+    end
+
+    subgraph COLAB[Google Colab con GPU]
+        MAIN[main.py]
+        CONFIG[config.colab.yaml]
+        PIPE[ScaniaOutlierPipeline]
+        SRC[src/scania_outliers]
+    end
+
+    CONFIG --> MAIN
+    MAIN --> PIPE
+    SRC --> PIPE
+    RAW --> PIPE
+    PIPE --> PROCESSED
+    PIPE --> MODELS
+    PIPE --> OUTPUTS
+    PIPE --> EXP
+    OUTPUTS --> DOC
