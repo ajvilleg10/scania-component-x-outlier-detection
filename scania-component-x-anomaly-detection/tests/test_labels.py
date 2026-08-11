@@ -1,6 +1,6 @@
 import pytest
 
-from scania_anomaly.labels import DEFAULT_LABEL_CANDIDATES
+from scania_outliers.labels import DEFAULT_LABEL_CANDIDATES
 
 
 def test_class_label_is_first_candidate():

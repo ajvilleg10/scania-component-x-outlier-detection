@@ -1,0 +1,19 @@
+flowchart TD
+    A[SCANIA Component X] --> B[Train oficial]
+    A --> C[Validation oficial]
+    A --> D[Test oficial]
+
+    B --> B1[Ajuste de imputación]
+    B --> B2[Ajuste de escalado]
+    B --> B3[Entrenamiento de modelos]
+
+    C --> C1[Control de entrenamiento]
+    C --> C2[Selección de hiperparámetros]
+    C --> C3[Ajuste de umbral]
+
+    D --> D1[Evaluación final]
+    D --> D2[Métricas definitivas]
+    D --> D3[Predicciones finales]
+
+    A --> E[No se realiza nueva partición]
+    A --> F[No se aplica validación cruzada]

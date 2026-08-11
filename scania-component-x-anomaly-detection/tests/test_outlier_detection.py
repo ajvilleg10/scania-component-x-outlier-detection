@@ -1,6 +1,6 @@
 import numpy as np
 
-from scania_anomaly.outlier_detection import classify_outliers, percentile_threshold, select_threshold
+from scania_outliers.outlier_detection import classify_outliers, percentile_threshold, select_threshold
 
 
 def test_percentile_threshold_and_classification():

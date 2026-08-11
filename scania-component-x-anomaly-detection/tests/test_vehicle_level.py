@@ -1,6 +1,6 @@
 import numpy as np
 
-from scania_anomaly.vehicle_level import aggregate_vehicle_scores, classify_vehicle_scores, make_window_predictions
+from scania_outliers.vehicle_level import aggregate_vehicle_scores, classify_vehicle_scores, make_window_predictions
 
 
 def test_vehicle_score_aggregation():

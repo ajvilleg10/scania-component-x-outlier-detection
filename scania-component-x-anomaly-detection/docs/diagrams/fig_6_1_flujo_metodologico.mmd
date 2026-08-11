@@ -1,0 +1,18 @@
+flowchart TD
+    A[Datos raw en Google Drive] --> B[EDA y calidad de datos]
+    B --> C[Preprocesamiento ajustado solo con train]
+    C --> D[Construcción de ventanas temporales]
+    D --> E[Entrenamiento en Google Colab GPU]
+    E --> F[Cálculo de outlier scores]
+    F --> G[Ajuste de umbral con validation]
+    G --> H[Evaluación final con test]
+    H --> I[Comparación final de modelos]
+    I --> J[Discusión desde mantenimiento predictivo]
+
+    K[main.py] --> L[ScaniaOutlierPipeline]
+    M[config.colab.yaml] --> L
+    L --> B
+    L --> C
+    L --> D
+    L --> E
+    L --> H
