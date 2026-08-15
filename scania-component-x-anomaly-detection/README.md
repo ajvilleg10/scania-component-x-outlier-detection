@@ -33,6 +33,8 @@ El pipeline respeta las decisiones metodológicas finales del TFM:
 9. La evaluación por ventana se conserva como análisis secundario para interpretar la evolución temporal de los scores.
 10. Los notebooks no son pasos manuales obligatorios; el flujo oficial se ejecuta desde `main.py`.
 11. El dataset descargado con KaggleHub debe copiarse a `Google Drive/data/raw` antes de ejecutar el pipeline.
+12. El pipeline principal no utiliza Pandas ni `toPandas()`; Spark procesa datos y genera ventanas en Parquet.
+13. PyTorch consume las ventanas desde Parquet por batches para entrenar en GPU sin cargar todo el dataset en memoria.
 
 ---
 
@@ -57,9 +59,13 @@ validación de archivos requeridos
    ↓
 EDA y calidad de datos
    ↓
-preprocesamiento ajustado solo con train
+preprocesamiento ajustado solo con train usando Spark
    ↓
-construcción de ventanas temporales
+construcción de ventanas temporales en Spark
+   ↓
+guardado de ventanas en Parquet particionado
+   ↓
+PyTorch lee Parquet por batches
    ↓
 entrenamiento de modelos en Colab GPU
    ↓
@@ -110,12 +116,14 @@ scania-component-x-outlier-detection-final-colab/
 │       ├── data_quality.py
 │       ├── labels.py
 │       ├── preprocessing.py
-│       ├── windowing.py
+│       ├── spark_windowing.py
+│       ├── windowing.py              # solo pruebas/ejemplos pequeños
 │       ├── outlier_detection.py
 │       ├── vehicle_level.py
 │       ├── model_factory.py
 │       ├── model_evaluation.py
 │       ├── temporal_analysis.py
+│       ├── datasets.py               # lectura streaming de Parquet para PyTorch
 │       ├── pipelines/
 │       │   ├── context.py
 │       │   ├── orchestrator.py
@@ -407,7 +415,9 @@ python main.py --config config/config.colab.yaml --stage all --model all --mode 
 ## 11. Salidas esperadas
 
 ```text
-/content/drive/MyDrive/TFM_SCANIA/data/processed/
+/content/drive/MyDrive/TFM_SCANIA/data/processed/windows/train/
+/content/drive/MyDrive/TFM_SCANIA/data/processed/windows/validation/
+/content/drive/MyDrive/TFM_SCANIA/data/processed/windows/test/
 /content/drive/MyDrive/TFM_SCANIA/models/
 /content/drive/MyDrive/TFM_SCANIA/outputs/
 /content/drive/MyDrive/TFM_SCANIA/experiments/
@@ -421,6 +431,41 @@ outputs/predictions/
 outputs/comparisons/
 outputs/figures/
 outputs/runs/<run_id>/manifests/
+```
+
+---
+
+## 11.1. Procesamiento sin Pandas
+
+La versión corregida del proyecto evita `toPandas()` en el pipeline principal. Esto mitiga errores de Arrow en Google Colab y evita trasladar DataFrames grandes al driver de Python.
+
+Flujo técnico aplicado:
+
+```text
+CSV en Drive/data/raw
+   ↓
+Spark DataFrames
+   ↓
+EDA, calidad, imputación y escalado en Spark
+   ↓
+SparkWindowBuilder genera ventanas temporales
+   ↓
+Parquet particionado en data/processed/windows/
+   ↓
+PyTorch lee Parquet por batches con PyArrow
+   ↓
+Entrenamiento y evaluación
+```
+
+Por esta razón, `config.colab.yaml` usa:
+
+```yaml
+spark:
+  arrow_enabled: false
+
+windowing:
+  output_format: parquet
+  use_pandas: false
 ```
 
 ---
@@ -451,6 +496,9 @@ notebooks/00_run_full_pipeline_colab.ipynb
 - No seleccionar umbral con `test`.
 - No evaluar resultados finales con `validation`.
 - No leer los CSV desde `/root/.cache/kagglehub/`.
+- No usar `toPandas()` sobre los DataFrames de lecturas operacionales.
+- Mantener `spark.arrow_enabled: false` en Colab para evitar errores Arrow/Java.
+- Generar ventanas en Parquet, no en `.npz`, para evitar cargar todo en memoria.
 - Copiar siempre los CSV a `Drive/data/raw` antes de ejecutar `main.py`.
 - Reportar resultados finales únicamente con `test`.
 

@@ -2,22 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 
 import numpy as np
-import pandas as pd
-
-try:
-    from pyspark.sql import DataFrame
-except Exception:  # pragma: no cover - helps local tests without Spark
-    DataFrame = object  # type: ignore
 
 LabelPolicy = Literal["vehicle_label", "max_label_in_window", "unlabeled"]
 
 
 @dataclass
 class WindowData:
-    """Container for fixed-length time windows and metadata."""
+    """Small in-memory container kept for unit tests and lightweight examples."""
 
     X: np.ndarray
     vehicle_ids: np.ndarray
@@ -28,10 +22,10 @@ class WindowData:
 
 
 class TimeWindowBuilder:
-    """Build fixed-length multivariate time windows by vehicle.
+    """Build fixed-length windows from in-memory Python records.
 
-    The builder supports controlled conversion to Pandas for Colab. For the full
-    dataset, use vehicle subsets or batches to avoid loading everything at once.
+    The production pipeline uses SparkWindowBuilder and Parquet outputs. This
+    class remains only for small tests/examples and does not depend on Pandas.
     """
 
     def __init__(
@@ -52,31 +46,25 @@ class TimeWindowBuilder:
         if row_labels is None or self.label_policy == "unlabeled":
             return -1
         if self.label_policy == "vehicle_label":
-            # vehicle-level labels are repeated on every row after joining; use the
-            # first available label in the window instead of implying time labels.
             valid = row_labels[start:end][row_labels[start:end] >= 0]
             return int(valid[0]) if len(valid) else -1
         if self.label_policy == "max_label_in_window":
             return int(np.max(row_labels[start:end]))
         raise ValueError(f"Unknown label_policy: {self.label_policy}")
 
-    def build_from_pandas(
-        self,
-        pdf: pd.DataFrame,
-        feature_cols: list[str],
-        label_col: Optional[str] = None,
-    ) -> WindowData:
+    def build_from_records(self, records: Sequence[dict], feature_cols: list[str], label_col: Optional[str] = None) -> WindowData:
+        grouped: dict[object, list[dict]] = {}
+        for row in records:
+            grouped.setdefault(row[self.vehicle_col], []).append(row)
+
         windows, vehicle_ids, labels, starts, ends = [], [], [], [], []
-
-        for vehicle_id, group in pdf.groupby(self.vehicle_col, sort=False):
-            group = group.sort_values(self.time_col)
-            values = group[feature_cols].to_numpy(dtype=np.float32)
-            times = group[self.time_col].to_numpy()
-
+        for vehicle_id, rows in grouped.items():
+            rows = sorted(rows, key=lambda r: r[self.time_col])
+            values = np.asarray([[row[c] for c in feature_cols] for row in rows], dtype=np.float32)
+            times = np.asarray([row[self.time_col] for row in rows])
             row_labels = None
-            if label_col and label_col in group.columns:
-                row_labels = group[label_col].to_numpy(dtype=np.int64)
-
+            if label_col:
+                row_labels = np.asarray([row.get(label_col, -1) for row in rows], dtype=np.int64)
             for start in range(0, max(len(values) - self.window_size + 1, 0), self.stride):
                 end = start + self.window_size
                 windows.append(values[start:end])
@@ -103,24 +91,6 @@ class TimeWindowBuilder:
             end_time=np.array(ends),
             feature_cols=feature_cols,
         )
-
-    def build_from_spark(
-        self,
-        df: DataFrame,
-        feature_cols: list[str],
-        max_vehicles: Optional[int] = None,
-        label_col: Optional[str] = None,
-    ) -> WindowData:
-        if max_vehicles is not None:
-            vehicles = [r[self.vehicle_col] for r in df.select(self.vehicle_col).distinct().limit(max_vehicles).collect()]
-            df = df.where(df[self.vehicle_col].isin(vehicles))
-
-        cols = [self.vehicle_col, self.time_col] + feature_cols
-        if label_col and label_col in df.columns:
-            cols.append(label_col)
-
-        pdf = df.select(cols).toPandas()
-        return self.build_from_pandas(pdf, feature_cols, label_col=label_col)
 
     @staticmethod
     def save_npz(path: str | Path, window_data: WindowData) -> None:

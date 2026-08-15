@@ -1,24 +1,26 @@
-import numpy as np
-
 from scania_outliers.vehicle_level import aggregate_vehicle_scores, classify_vehicle_scores, make_window_predictions
 
 
+def _find(rows, vehicle_id):
+    return next(r for r in rows if r["vehicle_id"] == vehicle_id)
+
+
 def test_vehicle_score_aggregation():
-    df = make_window_predictions(
+    rows = make_window_predictions(
         vehicle_ids=["A", "A", "B", "B"],
         scores=[0.1, 0.9, 0.2, 0.3],
         y_true=[1, 1, 0, 0],
         predictions=[0, 1, 0, 0],
     )
-    agg = aggregate_vehicle_scores(df)
-    assert set(agg["vehicle_id"]) == {"A", "B"}
-    assert agg.loc[agg["vehicle_id"] == "A", "max_score"].iloc[0] == 0.9
-    assert agg.loc[agg["vehicle_id"] == "A", "y_true"].iloc[0] == 1
-    assert agg.loc[agg["vehicle_id"] == "B", "y_true"].iloc[0] == 0
+    agg = aggregate_vehicle_scores(rows)
+    assert {r["vehicle_id"] for r in agg} == {"A", "B"}
+    assert _find(agg, "A")["max_score"] == 0.9
+    assert _find(agg, "A")["y_true"] == 1
+    assert _find(agg, "B")["y_true"] == 0
 
 
 def test_vehicle_classification():
-    df = make_window_predictions(["A", "B"], [0.9, 0.2], y_true=[1, 0])
-    agg = aggregate_vehicle_scores(df)
+    rows = make_window_predictions(["A", "B"], [0.9, 0.2], y_true=[1, 0])
+    agg = aggregate_vehicle_scores(rows)
     pred = classify_vehicle_scores(agg, threshold=0.5)
-    assert pred["is_outlier"].tolist() == [1, 0]
+    assert [r["is_outlier"] for r in pred] == [1, 0]

@@ -75,9 +75,10 @@ dataset:
 spark:
   app_name: ScaniaComponentXOutlierDetection
   master: local[*]
-  shuffle_partitions: 64
-  driver_memory: 8g
-  arrow_enabled: true
+  shuffle_partitions: 8
+  driver_memory: 12g
+  arrow_enabled: false
+  debug_max_to_string_fields: 200
 preprocessing:
   id_col: vehicle_id
   time_col: time_step
@@ -98,7 +99,9 @@ preprocessing:
 windowing:
   window_size: 30
   stride: 5
-  output_format: npz
+  output_format: parquet
+  use_pandas: false
+  parquet_partitions: 8
   label_policy: vehicle_label
   aggregation_level: vehicle
   analyze_time_irregularity: true

@@ -1,25 +1,36 @@
+from __future__ import annotations
+
+import argparse
+import csv
+import json
 from pathlib import Path
-
-import pandas as pd
-
-from scania_outliers.config import load_config
 
 
 def main() -> None:
-    config = load_config()
-    metrics_dir = Path(config["paths"]["metrics_dir"])
-    files = sorted(metrics_dir.glob("*_test_metrics.json"))
-    if not files:
-        raise FileNotFoundError(f"No metric files found in {metrics_dir}")
+    parser = argparse.ArgumentParser(description="Compare JSON metric files without Pandas")
+    parser.add_argument("--metrics-dir", required=True)
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args()
 
-    rows = [pd.read_json(file, typ="series").to_dict() for file in files]
-    comparison = pd.DataFrame(rows).sort_values("f1_score", ascending=False)
+    metrics_dir = Path(args.metrics_dir)
+    files = sorted(metrics_dir.glob("*_metrics.json"))
+    rows = []
+    for file in files:
+        with file.open("r", encoding="utf-8") as f:
+            rows.append(json.load(f))
+    rows.sort(key=lambda r: (r.get("f1_score") is None, -(r.get("f1_score") or 0)))
 
-    output_path = Path(config["paths"]["tables_dir"]) / "model_comparison.csv"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    comparison.to_csv(output_path, index=False)
-    print(comparison)
-    print(f"Saved comparison table to {output_path}")
+    out = Path(args.output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = []
+    for row in rows:
+        for key in row.keys():
+            if key not in fieldnames:
+                fieldnames.append(key)
+    with out.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 if __name__ == "__main__":

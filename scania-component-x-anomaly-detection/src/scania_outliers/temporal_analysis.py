@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pandas as pd
-
 try:
     from pyspark.sql import DataFrame, Window
     from pyspark.sql import functions as F
@@ -14,12 +12,8 @@ def time_step_gap_report(
     vehicle_col: str = "vehicle_id",
     time_col: str = "time_step",
     sample_fraction: float | None = None,
-) -> pd.DataFrame:
-    """Summarize gaps between consecutive time steps by vehicle.
-
-    The output helps document whether windows should be interpreted as fixed-size
-    sequential segments rather than equal-duration time intervals.
-    """
+) -> list[dict]:
+    """Summarize gaps between consecutive time steps by vehicle using Spark only."""
     work = df
     if sample_fraction is not None and 0 < sample_fraction < 1:
         work = work.sample(withReplacement=False, fraction=sample_fraction, seed=42)
@@ -32,21 +26,21 @@ def time_step_gap_report(
         .withColumn("delta_time_step", F.col(time_col) - F.col("prev_time_step"))
         .where(F.col("delta_time_step").isNotNull())
     )
-    summary = gaps.select(
+    row = gaps.select(
         F.count("delta_time_step").alias("n_gaps"),
         F.mean("delta_time_step").alias("mean_gap"),
         F.expr("percentile_approx(delta_time_step, 0.5)").alias("median_gap"),
         F.expr("percentile_approx(delta_time_step, 0.95)").alias("p95_gap"),
         F.min("delta_time_step").alias("min_gap"),
         F.max("delta_time_step").alias("max_gap"),
-    ).toPandas()
-    return summary
+    ).collect()[0].asDict()
+    return [{k: (float(v) if isinstance(v, float) else int(v) if isinstance(v, int) else v) for k, v in row.items()}]
 
 
-def trajectory_length_report(df: DataFrame, vehicle_col: str = "vehicle_id") -> pd.DataFrame:
-    """Return summary statistics of number of records per vehicle."""
+def trajectory_length_report(df: DataFrame, vehicle_col: str = "vehicle_id") -> list[dict]:
+    """Return summary statistics of number of records per vehicle using Spark only."""
     counts = df.groupBy(vehicle_col).count()
-    return counts.select(
+    row = counts.select(
         F.count("count").alias("n_vehicles"),
         F.mean("count").alias("mean_records"),
         F.expr("percentile_approx(count, 0.5)").alias("median_records"),
@@ -54,4 +48,5 @@ def trajectory_length_report(df: DataFrame, vehicle_col: str = "vehicle_id") -> 
         F.expr("percentile_approx(count, 0.95)").alias("p95_records"),
         F.min("count").alias("min_records"),
         F.max("count").alias("max_records"),
-    ).toPandas()
+    ).collect()[0].asDict()
+    return [{k: (float(v) if isinstance(v, float) else int(v) if isinstance(v, int) else v) for k, v in row.items()}]

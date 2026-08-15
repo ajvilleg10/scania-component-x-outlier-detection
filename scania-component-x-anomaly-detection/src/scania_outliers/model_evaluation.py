@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
-import pandas as pd
 from sklearn.metrics import (
     average_precision_score,
     confusion_matrix,
@@ -55,17 +57,14 @@ def binary_classification_metrics(y_true, y_pred, scores=None) -> dict:
     return metrics
 
 
-def metrics_to_dataframe(model_name: str, metrics: dict, split: str = "test", level: str = "vehicle") -> pd.DataFrame:
-    return pd.DataFrame([{"model": model_name, "split": split, "level": level, **metrics}])
+def metrics_row(model_name: str, metrics: dict, split: str = "test", level: str = "vehicle") -> dict:
+    return {"model": model_name, "split": split, "level": level, **metrics}
 
 
-def compare_metric_files(metric_files: list[str]) -> pd.DataFrame:
-    """Load JSON metric files and return a comparison table."""
-    import json
-    from pathlib import Path
-
+def compare_metric_files(metric_files: list[str]) -> list[dict]:
+    """Load JSON metric files and return comparison rows."""
     rows = []
     for file in metric_files:
         with Path(file).open("r", encoding="utf-8") as f:
             rows.append(json.load(f))
-    return pd.DataFrame(rows)
+    return rows

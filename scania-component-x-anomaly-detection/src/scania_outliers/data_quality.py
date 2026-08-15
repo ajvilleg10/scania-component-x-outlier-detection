@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import csv
+from pathlib import Path
 from typing import Iterable, List
 
-import pandas as pd
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
 
 class DataQualityAnalyzer:
-    """Performs scalable quality checks over Spark DataFrames."""
+    """Performs scalable quality checks over Spark DataFrames.
+
+    The methods return native Python rows (list[dict]) instead of Pandas DataFrames
+    to keep the project independent of Pandas and avoid Spark-to-Pandas transfers.
+    """
 
     def __init__(self, dataframe: DataFrame):
         self.df = dataframe
@@ -16,15 +21,19 @@ class DataQualityAnalyzer:
     def shape(self) -> tuple[int, int]:
         return self.df.count(), len(self.df.columns)
 
-    def schema_as_pandas(self) -> pd.DataFrame:
-        return pd.DataFrame(self.df.dtypes, columns=["column", "dtype"])
+    def schema_rows(self) -> list[dict]:
+        return [{"column": col_name, "dtype": dtype} for col_name, dtype in self.df.dtypes]
+
+    # Backward-compatible alias used by older code paths. It does not return Pandas.
+    def schema_as_rows(self) -> list[dict]:
+        return self.schema_rows()
 
     def duplicated_count(self, subset: Iterable[str] | None = None) -> int:
         if subset:
             return self.df.count() - self.df.dropDuplicates(list(subset)).count()
         return self.df.count() - self.df.dropDuplicates().count()
 
-    def missing_report(self) -> pd.DataFrame:
+    def missing_report(self) -> list[dict]:
         total = self.df.count()
         expressions = []
         for col_name, dtype in self.df.dtypes:
@@ -35,12 +44,15 @@ class DataQualityAnalyzer:
             expressions.append(expr)
 
         row = self.df.select(expressions).collect()[0].asDict()
-        return (
-            pd.DataFrame({"column": list(row.keys()), "missing_count": list(row.values())})
-            .assign(missing_ratio=lambda x: x["missing_count"] / max(total, 1))
-            .sort_values("missing_ratio", ascending=False)
-            .reset_index(drop=True)
-        )
+        rows = [
+            {
+                "column": col,
+                "missing_count": int(count or 0),
+                "missing_ratio": float((count or 0) / max(total, 1)),
+            }
+            for col, count in row.items()
+        ]
+        return sorted(rows, key=lambda r: r["missing_ratio"], reverse=True)
 
     def constant_columns(self, columns: List[str] | None = None) -> List[str]:
         cols = columns or self.df.columns
@@ -55,10 +67,22 @@ class DataQualityAnalyzer:
         return constant
 
 
-def save_quality_report(report: pd.DataFrame, path: str) -> None:
-    """Persist a quality report as CSV."""
-    from pathlib import Path
+def save_rows_csv(rows: list[dict], path: str | Path, fieldnames: list[str] | None = None) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not fieldnames:
+        keys = []
+        for row in rows:
+            for key in row.keys():
+                if key not in keys:
+                    keys.append(key)
+        fieldnames = keys
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    report.to_csv(output_path, index=False)
+
+def save_quality_report(report: list[dict], path: str) -> None:
+    """Persist a quality report as CSV."""
+    save_rows_csv(report, path, fieldnames=["column", "missing_count", "missing_ratio"])

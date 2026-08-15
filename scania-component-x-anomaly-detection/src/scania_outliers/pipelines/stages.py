@@ -1,18 +1,17 @@
 from __future__ import annotations
 
+import csv
 import json
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import torch
-from torch.utils.data import DataLoader
 
 from scania_outliers.data_loader import ScaniaDataLoader
-from scania_outliers.data_quality import DataQualityAnalyzer, save_quality_report
-from scania_outliers.datasets import WindowDataset, to_tensor_dataset
+from scania_outliers.data_quality import DataQualityAnalyzer, save_quality_report, save_rows_csv
+from scania_outliers.datasets import inspect_parquet_windows, make_parquet_loader, score_parquet_windows
 from scania_outliers.experiment_tracking import save_json, save_predictions_table
 from scania_outliers.labels import (
     attach_vehicle_labels,
@@ -21,19 +20,18 @@ from scania_outliers.labels import (
 )
 from scania_outliers.model_evaluation import binary_classification_metrics
 from scania_outliers.model_factory import ModelFactory
-from scania_outliers.outlier_detection import classify_outliers, reconstruction_errors, select_threshold
+from scania_outliers.outlier_detection import select_threshold, threshold_rows
 from scania_outliers.preprocessing import (
     apply_train_fitted_preprocessing,
     get_numeric_columns,
 )
+from scania_outliers.spark_windowing import SparkWindowBuilder
 from scania_outliers.temporal_analysis import time_step_gap_report
 from scania_outliers.training.trainer import AutoencoderTrainer, TrainingConfig
 from scania_outliers.vehicle_level import (
     aggregate_vehicle_scores,
     classify_vehicle_scores,
-    make_window_predictions,
 )
-from scania_outliers.windowing import TimeWindowBuilder, WindowData
 
 
 class BaseStage:
@@ -63,16 +61,18 @@ class BaseStage:
     def loader(self) -> ScaniaDataLoader:
         return ScaniaDataLoader.from_config(self.ctx.get_spark(), self.config)
 
+    def _write_csv_rows(self, rows: list[dict[str, Any]], path: Path) -> None:
+        save_rows_csv(rows, path)
+
 
 class CheckDataStage(BaseStage):
     """Validate that all required CSV files exist in Google Drive/data/raw."""
 
     def run(self) -> dict[str, Any]:
         self.log.info("Running raw data validation stage")
-        from pathlib import Path
-
         raw_dir = Path(self.config["paths"]["raw_dir"])
-        alt_raw = Path(self.config["paths"].get("raw_dir_alternative", ""))
+        alt_raw_value = self.config["paths"].get("raw_dir_alternative")
+        alt_raw = Path(alt_raw_value) if alt_raw_value else None
         files = self.file_map
         missing = []
         found = {}
@@ -117,7 +117,7 @@ class CheckDataStage(BaseStage):
 
 
 class EDAStage(BaseStage):
-    """Exploratory analysis and quality control stage."""
+    """Exploratory analysis and quality control stage implemented with Spark only."""
 
     def run(self) -> dict[str, Any]:
         self.log.info("Running EDA and data quality stage")
@@ -132,10 +132,9 @@ class EDAStage(BaseStage):
             self.log.info("%s: %s rows, %s columns", alias, n_rows, n_cols)
 
             schema_path = self.ctx.artifact_path("tables", f"schema_{alias}.csv")
-            analyzer.schema_as_pandas().to_csv(schema_path, index=False)
+            save_rows_csv(analyzer.schema_rows(), schema_path, fieldnames=["column", "dtype"])
             file_summary["schema_path"] = str(schema_path)
 
-            # Missing reports over very large files can be expensive, but they are part of the methodology.
             try:
                 missing = analyzer.missing_report()
                 missing_path = self.ctx.artifact_path("tables", f"missing_{alias}.csv")
@@ -148,7 +147,7 @@ class EDAStage(BaseStage):
                 try:
                     temporal = time_step_gap_report(df, self.vehicle_col, self.time_col)
                     temporal_path = self.ctx.artifact_path("tables", f"temporal_gaps_{alias}.csv")
-                    temporal.to_csv(temporal_path, index=False)
+                    save_rows_csv(temporal, temporal_path)
                     file_summary["temporal_gap_report_path"] = str(temporal_path)
                 except Exception as exc:  # pragma: no cover
                     file_summary["temporal_gap_error"] = str(exc)
@@ -168,7 +167,7 @@ class EDAStage(BaseStage):
 
 
 class PreprocessingWindowingStage(BaseStage):
-    """Leakage-safe preprocessing and window construction."""
+    """Leakage-safe preprocessing and Spark-native window construction."""
 
     def _max_vehicles(self) -> int | None:
         execution = self.config.get("execution", {})
@@ -176,10 +175,12 @@ class PreprocessingWindowingStage(BaseStage):
             return int(execution.get("max_vehicles_debug", 100))
         return None
 
+    def _windows_dir(self, split: str) -> Path:
+        return self.ctx.paths.processed_dir / "windows" / split
+
     def run(self) -> dict[str, Any]:
-        self.log.info("Running preprocessing and windowing stage")
+        self.log.info("Running preprocessing and Spark-native windowing stage")
         loader = self.loader()
-        f = self.file_map
 
         train_op = loader.read_csv("train_operational")
         validation_op = loader.read_csv("validation_operational")
@@ -215,7 +216,7 @@ class PreprocessingWindowingStage(BaseStage):
         )
 
         w_cfg = self.config.get("windowing", {})
-        builder = TimeWindowBuilder(
+        builder = SparkWindowBuilder(
             vehicle_col=self.vehicle_col,
             time_col=self.time_col,
             window_size=int(w_cfg.get("window_size", 30)),
@@ -224,28 +225,30 @@ class PreprocessingWindowingStage(BaseStage):
         )
         max_vehicles = self._max_vehicles()
         label_col = self.label_col
+        partitions = int(w_cfg.get("parquet_partitions", self.config.get("spark", {}).get("shuffle_partitions", 8)))
 
-        train_windows = builder.build_from_spark(train_proc, scaled_cols, max_vehicles=max_vehicles, label_col=label_col)
-        validation_windows = builder.build_from_spark(val_proc, scaled_cols, max_vehicles=max_vehicles, label_col=label_col)
-        test_windows = builder.build_from_spark(test_proc, scaled_cols, max_vehicles=max_vehicles, label_col=label_col)
-
-        processed_dir = self.ctx.paths.processed_dir
-        processed_dir.mkdir(parents=True, exist_ok=True)
-        paths = {
-            "train_windows": processed_dir / "train_windows.npz",
-            "validation_windows": processed_dir / "validation_windows.npz",
-            "test_windows": processed_dir / "test_windows.npz",
+        split_dfs = {
+            "train": train_proc,
+            "validation": val_proc,
+            "test": test_proc,
         }
-        builder.save_npz(paths["train_windows"], train_windows)
-        builder.save_npz(paths["validation_windows"], validation_windows)
-        builder.save_npz(paths["test_windows"], test_windows)
+        window_paths: dict[str, str] = {}
+        split_metadata: dict[str, dict[str, Any]] = {}
+        for split, df in split_dfs.items():
+            self.log.info("Building %s windows with Spark", split)
+            windows_df = builder.build(df, scaled_cols, max_vehicles=max_vehicles, label_col=label_col)
+            output_dir = self._windows_dir(split)
+            meta = builder.write_parquet(windows_df, output_dir, partitions=partitions)
+            window_paths[f"{split}_windows"] = str(output_dir)
+            split_metadata[split] = meta.to_dict()
+            self.log.info("%s windows saved to %s (%s windows)", split, output_dir, meta.n_windows)
 
         metadata_payload = metadata.to_dict()
         metadata_payload.update(
             {
-                "n_train_windows": int(len(train_windows.X)),
-                "n_validation_windows": int(len(validation_windows.X)),
-                "n_test_windows": int(len(test_windows.X)),
+                "window_format": "parquet",
+                "use_pandas": False,
+                "splits": split_metadata,
                 "window_size": int(w_cfg.get("window_size", 30)),
                 "stride": int(w_cfg.get("stride", 5)),
                 "label_policy": w_cfg.get("label_policy", "vehicle_label"),
@@ -256,37 +259,36 @@ class PreprocessingWindowingStage(BaseStage):
         metadata_path = self.ctx.artifact_path("manifests", pre_cfg.get("metadata_file", "preprocessing_metadata.json"))
         save_json(metadata_payload, metadata_path)
 
-        return {"window_paths": {k: str(v) for k, v in paths.items()}, "metadata_path": str(metadata_path), **metadata_payload}
+        return {"window_paths": window_paths, "metadata_path": str(metadata_path), **metadata_payload}
 
 
 class TrainingStage(BaseStage):
     """Model training stage for reconstruction-based outlier detection."""
 
     def _window_path(self, split: str) -> Path:
-        return self.ctx.paths.processed_dir / f"{split}_windows.npz"
+        return self.ctx.paths.processed_dir / "windows" / split
 
-    def _make_loader(self, window_data: WindowData, batch_size: int, shuffle: bool = False) -> DataLoader:
-        return DataLoader(to_tensor_dataset(window_data), batch_size=batch_size, shuffle=shuffle)
+    def _make_loader(self, split: str, batch_size: int):
+        return make_parquet_loader(self._window_path(split), batch_size=batch_size)
 
     def run(self, model: str = "all") -> dict[str, Any]:
         self.log.info("Running training stage")
         modeling = self.config.get("modeling", {})
         requested_models = ModelFactory.resolve_requested_models(model, self.config)
         batch_size = int(modeling.get("batch_size", 128))
-        train_windows = TimeWindowBuilder.load_npz(self._window_path("train"))
-        validation_windows = TimeWindowBuilder.load_npz(self._window_path("validation"))
-        n_features = int(train_windows.X.shape[-1])
-        window_size = int(train_windows.X.shape[1])
+
+        train_info = inspect_parquet_windows(self._window_path("train"))
+        n_features = int(train_info["n_features"])
+        window_size = int(train_info["window_size"])
+        if n_features <= 0 or window_size <= 0:
+            raise ValueError("Invalid train window metadata. Run preprocessing/windowing first.")
 
         # The SCANIA Component X dataset already provides official train, validation and test partitions.
         # Therefore, the pipeline does not create k-fold splits or any additional training partitions.
-        # Train is used to fit model weights; official validation controls early stopping and threshold selection;
-        # test remains reserved for final evaluation.
-        train_loader = self._make_loader(train_windows, batch_size=batch_size, shuffle=True)
-        validation_loader = self._make_loader(validation_windows, batch_size=batch_size, shuffle=False)
-        val_loss_loader = validation_loader
+        train_loader = self._make_loader("train", batch_size=batch_size)
+        validation_loader = self._make_loader("validation", batch_size=batch_size)
 
-        out: dict[str, Any] = {"models": {}}
+        out: dict[str, Any] = {"models": {}, "window_metadata": train_info}
         for model_name in requested_models:
             self.log.info("Training model: %s", model_name)
             model_obj = ModelFactory.create(model_name, n_features=n_features, window_size=window_size, config=self.config)
@@ -300,24 +302,17 @@ class TrainingStage(BaseStage):
                     device=str(modeling.get("device", "auto")),
                 ),
             )
-            history = trainer.fit(train_loader, val_loss_loader)
+            history = trainer.fit(train_loader, validation_loader)
             model_dir = self.ctx.paths.models_dir / model_name
             model_path = model_dir / "model.pt"
             trainer.save(model_path)
 
-            validation_scores = reconstruction_errors(model_obj, validation_loader, device=str(modeling.get("device", "auto")))
-            validation_window_predictions = make_window_predictions(
-                vehicle_ids=validation_windows.vehicle_ids,
-                y_true=validation_windows.y,
-                scores=validation_scores,
-                start_time=validation_windows.start_time,
-                end_time=validation_windows.end_time,
-            )
-            validation_vehicle_scores = aggregate_vehicle_scores(validation_window_predictions)
+            validation_rows = score_parquet_windows(model_obj, self._window_path("validation"), batch_size=batch_size, device=str(modeling.get("device", "auto")))
+            validation_vehicle_scores = aggregate_vehicle_scores(validation_rows)
             score_col = self.config.get("outlier_detection", {}).get("vehicle_aggregation", {}).get("primary_score", "max_score")
             threshold = select_threshold(
-                scores=validation_vehicle_scores[score_col].to_numpy(),
-                y_true=validation_vehicle_scores["y_true"].to_numpy(),
+                scores=np.asarray([r[score_col] for r in validation_vehicle_scores], dtype=float),
+                y_true=np.asarray([r["y_true"] for r in validation_vehicle_scores], dtype=int),
                 strategy=self.config.get("outlier_detection", {}).get("threshold_strategy", "best_f1_on_validation"),
                 percentile=float(self.config.get("outlier_detection", {}).get("threshold_percentile", 95)),
             )
@@ -350,7 +345,7 @@ class EvaluationStage(BaseStage):
     """Evaluation stage using validation-selected thresholds and final test split."""
 
     def _window_path(self, split: str) -> Path:
-        return self.ctx.paths.processed_dir / f"{split}_windows.npz"
+        return self.ctx.paths.processed_dir / "windows" / split
 
     def _load_threshold(self, model_name: str) -> dict[str, Any]:
         path = self.ctx.paths.models_dir / model_name / "threshold.json"
@@ -374,10 +369,9 @@ class EvaluationStage(BaseStage):
         batch_size = int(self.config.get("modeling", {}).get("batch_size", 128))
         device = str(self.config.get("modeling", {}).get("device", "auto"))
 
-        window_data = TimeWindowBuilder.load_npz(self._window_path(split))
-        loader = DataLoader(to_tensor_dataset(window_data), batch_size=batch_size, shuffle=False)
-        n_features = int(window_data.X.shape[-1])
-        window_size = int(window_data.X.shape[1])
+        window_info = inspect_parquet_windows(self._window_path(split))
+        n_features = int(window_info["n_features"])
+        window_size = int(window_info["window_size"])
 
         all_metrics: list[dict[str, Any]] = []
         output: dict[str, Any] = {"split": split, "models": {}}
@@ -389,45 +383,35 @@ class EvaluationStage(BaseStage):
             model_obj = self._load_model(model_name, n_features=n_features, window_size=window_size)
 
             start = time.time()
-            scores = reconstruction_errors(model_obj, loader, device=device)
+            window_rows = score_parquet_windows(model_obj, self._window_path(split), batch_size=batch_size, device=device)
             inference_time = round(time.time() - start, 3)
-            window_pred = classify_outliers(scores, threshold)
-            window_df = make_window_predictions(
-                vehicle_ids=window_data.vehicle_ids,
-                scores=scores,
-                y_true=window_data.y,
-                predictions=window_pred,
-                start_time=window_data.start_time,
-                end_time=window_data.end_time,
-            )
-            vehicle_df = aggregate_vehicle_scores(window_df)
-            vehicle_df = classify_vehicle_scores(vehicle_df, threshold, score_col=vehicle_score_col)
+            window_rows = threshold_rows(window_rows, threshold, score_col="outlier_score", pred_col="is_outlier")
+            vehicle_rows = aggregate_vehicle_scores(window_rows)
+            vehicle_rows = classify_vehicle_scores(vehicle_rows, threshold, score_col=vehicle_score_col)
 
             vehicle_metrics = binary_classification_metrics(
-                vehicle_df["y_true"].to_numpy(),
-                vehicle_df["is_outlier"].to_numpy(),
-                scores=vehicle_df[vehicle_score_col].to_numpy(),
+                [r["y_true"] for r in vehicle_rows],
+                [r["is_outlier"] for r in vehicle_rows],
+                scores=[r[vehicle_score_col] for r in vehicle_rows],
             )
             window_metrics = binary_classification_metrics(
-                window_df["y_true"].to_numpy(),
-                window_df["is_outlier"].to_numpy(),
-                scores=window_df["outlier_score"].to_numpy(),
+                [r["y_true"] for r in window_rows],
+                [r["is_outlier"] for r in window_rows],
+                scores=[r["outlier_score"] for r in window_rows],
             )
             vehicle_metrics.update({"model": model_name, "split": split, "level": "vehicle", "threshold": threshold, "inference_time_seconds": inference_time})
             window_metrics.update({"model": model_name, "split": split, "level": "window", "threshold": threshold, "inference_time_seconds": inference_time})
             all_metrics.extend([vehicle_metrics, window_metrics])
 
             pred_dir = self.ctx.paths.outputs_dir / "predictions" / model_name
-            save_predictions_table(window_df, pred_dir / f"{split}_window_predictions.csv")
-            save_predictions_table(vehicle_df, pred_dir / f"{split}_vehicle_predictions.csv")
+            save_predictions_table(window_rows, pred_dir / f"{split}_window_predictions.csv")
+            save_predictions_table(vehicle_rows, pred_dir / f"{split}_vehicle_predictions.csv")
             save_json(vehicle_metrics, self.ctx.paths.metrics_dir / f"{model_name}_{split}_vehicle_metrics.json")
             save_json(window_metrics, self.ctx.paths.metrics_dir / f"{model_name}_{split}_window_metrics.json")
             output["models"][model_name] = {"vehicle_metrics": vehicle_metrics, "window_metrics": window_metrics}
 
-        comparison = pd.DataFrame(all_metrics)
         comparison_path = self.ctx.paths.metrics_dir / f"comparison_{split}.csv"
-        comparison_path.parent.mkdir(parents=True, exist_ok=True)
-        comparison.to_csv(comparison_path, index=False)
+        save_rows_csv(all_metrics, comparison_path)
         output["comparison_path"] = str(comparison_path)
         self.ctx.save_stage_manifest("evaluate", output)
         return output
@@ -445,7 +429,6 @@ class ComparisonStage(BaseStage):
                 rows.append(json.load(f))
         if not rows:
             return {"message": "No metric JSON files found", "metrics_dir": str(metrics_dir)}
-        df = pd.DataFrame(rows)
         out_path = metrics_dir / "comparison_all_models.csv"
-        df.to_csv(out_path, index=False)
-        return {"comparison_path": str(out_path), "n_rows": len(df)}
+        save_rows_csv(rows, out_path)
+        return {"comparison_path": str(out_path), "n_rows": len(rows)}

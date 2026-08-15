@@ -1,49 +1,54 @@
 # Guía de ejecución en Google Colab
 
-## 1. Activar GPU
-
-Entorno de ejecución -> Cambiar tipo de entorno de ejecución -> GPU.
-
-```bash
-!nvidia-smi
-```
-
-## 2. Montar Drive
+## 1. Montar Drive
 
 ```python
 from google.colab import drive
 drive.mount('/content/drive')
 ```
 
-## 3. Ir al proyecto
+## 2. Instalar dependencias
 
 ```bash
-%cd /content/drive/MyDrive/TFM_SCANIA/project/scania-component-x-outlier-detection-final-colab
+pip install -r requirements.txt
 ```
 
-## 4. Instalar dependencias
+## 3. Crear carpetas
 
 ```bash
-!pip install -r requirements.txt
-!pip install -e .
+python scripts/create_drive_folders.py --config config/config.colab.yaml
 ```
 
-## 5. Validar entorno
+## 4. Descargar dataset desde Kaggle y copiarlo a Drive/raw
 
 ```bash
-!python scripts/check_environment.py --config config/config.colab.yaml
+python scripts/download_kaggle_to_drive.py --config config/config.colab.yaml
 ```
 
-## 6. Ejecutar debug
+## 5. Validar archivos raw
 
 ```bash
-!python main.py --config config/config.colab.yaml --stage all --model all --mode debug
+python scripts/check_raw_files.py --config config/config.colab.yaml
 ```
 
-## 7. Ejecutar resultados finales
+## 6. Validar configuración sin procesos pesados
 
 ```bash
-!python main.py --config config/config.colab.yaml --stage all --model all --mode full
+python main.py --config config/config.colab.yaml --stage all --model all --mode debug --dry-run
 ```
 
-Si Colab se desconecta, ejecutar por etapas como se indica en el README.
+## 7. Ejecución debug
+
+```bash
+python main.py --config config/config.colab.yaml --stage all --model all --mode debug
+```
+
+## 8. Ejecución final
+
+```bash
+python main.py --config config/config.colab.yaml --stage all --model all --mode full
+```
+
+## Nota importante
+
+El pipeline corregido no usa Pandas ni `toPandas()` para procesar el dataset. Spark genera las ventanas en Parquet y PyTorch las lee por batches durante entrenamiento y evaluación.

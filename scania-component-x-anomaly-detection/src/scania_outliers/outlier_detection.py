@@ -67,6 +67,15 @@ def select_threshold(
     raise ValueError(f"Unknown threshold strategy: {strategy}")
 
 
-def classify_outliers(scores: np.ndarray, threshold: float) -> np.ndarray:
+def classify_outliers(scores, threshold: float) -> np.ndarray:
     """Return binary labels: 1 = outlier, 0 = inlier."""
     return (np.asarray(scores, dtype=float) > threshold).astype(int)
+
+
+def threshold_rows(rows: list[dict], threshold: float, score_col: str = "outlier_score", pred_col: str = "is_outlier") -> list[dict]:
+    out = []
+    for row in rows:
+        item = dict(row)
+        item[pred_col] = int(float(item[score_col]) > threshold)
+        out.append(item)
+    return out
