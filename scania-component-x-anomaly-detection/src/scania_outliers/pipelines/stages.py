@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 import torch
+from pyspark.storagelevel import StorageLevel
+from pyspark.sql import functions as F
 
 from scania_outliers.data_loader import ScaniaDataLoader
 from scania_outliers.data_quality import DataQualityAnalyzer, save_quality_report, save_rows_csv
@@ -23,6 +25,7 @@ from scania_outliers.model_factory import ModelFactory
 from scania_outliers.outlier_detection import select_threshold, threshold_rows
 from scania_outliers.preprocessing import (
     apply_train_fitted_preprocessing,
+    constant_columns_fast,
     get_numeric_columns,
 )
 from scania_outliers.spark_windowing import SparkWindowBuilder
@@ -117,40 +120,65 @@ class CheckDataStage(BaseStage):
 
 
 class EDAStage(BaseStage):
-    """Exploratory analysis and quality control stage implemented with Spark only."""
+    """Exploratory analysis and quality control stage implemented with Spark only.
+
+    In debug mode the stage avoids expensive full missing/temporal reports over the
+    wide operational files. This keeps Colab responsive; complete EDA can still be
+    requested in full mode by setting `eda.fast_debug: false`.
+    """
+
+    def _fast_debug(self) -> bool:
+        return (
+            self.config.get("execution", {}).get("mode", "debug") == "debug"
+            and bool(self.config.get("eda", {}).get("fast_debug", True))
+        )
+
+    @staticmethod
+    def _is_large_operational(alias: str) -> bool:
+        return alias.endswith("operational") or alias in {"train_operational", "validation_operational", "test_operational"}
 
     def run(self) -> dict[str, Any]:
         self.log.info("Running EDA and data quality stage")
         loader = self.loader()
         loaded = loader.load_available_files(self.file_map)
-        summary: dict[str, Any] = {"loaded_files": list(loaded.keys()), "files": {}}
+        summary: dict[str, Any] = {"loaded_files": list(loaded.keys()), "files": {}, "fast_debug": self._fast_debug()}
 
         for alias, df in loaded.items():
             analyzer = DataQualityAnalyzer(df)
-            n_rows, n_cols = analyzer.shape()
-            file_summary = {"n_rows": n_rows, "n_cols": n_cols}
-            self.log.info("%s: %s rows, %s columns", alias, n_rows, n_cols)
+            skip_heavy = self._fast_debug() and self._is_large_operational(alias)
+            if skip_heavy and bool(self.config.get("eda", {}).get("skip_exact_counts_in_debug", True)):
+                n_rows, n_cols = None, len(df.columns)
+                file_summary = {"n_rows": "skipped_fast_debug", "n_cols": n_cols}
+                self.log.info("%s: row count skipped in fast_debug, %s columns", alias, n_cols)
+            else:
+                n_rows, n_cols = analyzer.shape()
+                file_summary = {"n_rows": n_rows, "n_cols": n_cols}
+                self.log.info("%s: %s rows, %s columns", alias, n_rows, n_cols)
 
             schema_path = self.ctx.artifact_path("tables", f"schema_{alias}.csv")
             save_rows_csv(analyzer.schema_rows(), schema_path, fieldnames=["column", "dtype"])
             file_summary["schema_path"] = str(schema_path)
 
-            try:
-                missing = analyzer.missing_report()
-                missing_path = self.ctx.artifact_path("tables", f"missing_{alias}.csv")
-                save_quality_report(missing, str(missing_path))
-                file_summary["missing_report_path"] = str(missing_path)
-            except Exception as exc:  # pragma: no cover - depends on Spark/data availability
-                file_summary["missing_report_error"] = str(exc)
-
-            if self.vehicle_col in df.columns and self.time_col in df.columns:
+            if skip_heavy:
+                file_summary["missing_report_skipped"] = "fast_debug mode: skipped for large operational file"
+                file_summary["temporal_gap_report_skipped"] = "fast_debug mode: skipped for large operational file"
+            else:
                 try:
-                    temporal = time_step_gap_report(df, self.vehicle_col, self.time_col)
-                    temporal_path = self.ctx.artifact_path("tables", f"temporal_gaps_{alias}.csv")
-                    save_rows_csv(temporal, temporal_path)
-                    file_summary["temporal_gap_report_path"] = str(temporal_path)
-                except Exception as exc:  # pragma: no cover
-                    file_summary["temporal_gap_error"] = str(exc)
+                    missing = analyzer.missing_report()
+                    missing_path = self.ctx.artifact_path("tables", f"missing_{alias}.csv")
+                    save_quality_report(missing, str(missing_path))
+                    file_summary["missing_report_path"] = str(missing_path)
+                except Exception as exc:  # pragma: no cover - depends on Spark/data availability
+                    file_summary["missing_report_error"] = str(exc)
+
+                if self.vehicle_col in df.columns and self.time_col in df.columns:
+                    try:
+                        temporal = time_step_gap_report(df, self.vehicle_col, self.time_col)
+                        temporal_path = self.ctx.artifact_path("tables", f"temporal_gaps_{alias}.csv")
+                        save_rows_csv(temporal, temporal_path)
+                        file_summary["temporal_gap_report_path"] = str(temporal_path)
+                    except Exception as exc:  # pragma: no cover
+                        file_summary["temporal_gap_error"] = str(exc)
 
             if alias.endswith("labels") or alias == "train_tte":
                 try:
@@ -167,20 +195,51 @@ class EDAStage(BaseStage):
 
 
 class PreprocessingWindowingStage(BaseStage):
-    """Leakage-safe preprocessing and Spark-native window construction."""
+    """Leakage-safe preprocessing and Spark-native window construction.
+
+    Optimized for Colab:
+    - in debug mode, filters vehicles before any expensive preprocessing;
+    - uses scalar train-fitted imputation/scaling instead of Spark ML vectors;
+    - persists only the reduced working splits;
+    - writes windows as partitioned Parquet.
+    """
 
     def _max_vehicles(self) -> int | None:
         execution = self.config.get("execution", {})
         if execution.get("mode", "debug") == "debug":
-            return int(execution.get("max_vehicles_debug", 100))
+            return int(execution.get("max_vehicles_debug", 50))
         return None
+
+    def _partitions(self) -> int:
+        return int(self.config.get("spark", {}).get("shuffle_partitions", 4))
 
     def _windows_dir(self, split: str) -> Path:
         return self.ctx.paths.processed_dir / "windows" / split
 
+    def _persist(self, df, name: str):
+        """Persist a working dataframe in disk/memory and materialize it once."""
+        cached = df.repartition(self._partitions(), self.vehicle_col).persist(StorageLevel.MEMORY_AND_DISK)
+        n_rows = cached.count()
+        self.log.info("%s working rows: %s", name, n_rows)
+        return cached
+
+    def _debug_vehicle_ids(self, labels_df, max_vehicles: int | None, normal_only: bool = False):
+        ids = labels_df
+        if normal_only and "in_study_repair" in ids.columns:
+            ids = ids.where(F.col("in_study_repair").cast("int") == 0)
+        ids = ids.select(self.vehicle_col).distinct()
+        if max_vehicles is not None:
+            ids = ids.limit(max_vehicles)
+        return ids
+
     def run(self) -> dict[str, Any]:
-        self.log.info("Running preprocessing and Spark-native windowing stage")
+        self.log.info("Running preprocessing and optimized Spark-native windowing stage")
         loader = self.loader()
+        spark = self.ctx.get_spark()
+
+        max_vehicles = self._max_vehicles()
+        if max_vehicles is not None:
+            self.log.info("Debug mode active: preprocessing/windowing limited to %s vehicles per split before expensive operations", max_vehicles)
 
         train_op = loader.read_csv("train_operational")
         validation_op = loader.read_csv("validation_operational")
@@ -189,9 +248,32 @@ class PreprocessingWindowingStage(BaseStage):
         validation_labels = loader.read_csv("validation_labels")
         test_labels = loader.read_csv("test_labels")
 
-        train_normal = filter_normal_training_vehicles(train_op, train_tte, vehicle_col=self.vehicle_col)
-        validation_labeled = attach_vehicle_labels(validation_op, validation_labels, vehicle_col=self.vehicle_col)
-        test_labeled = attach_vehicle_labels(test_op, test_labels, vehicle_col=self.vehicle_col)
+        # Filter vehicle IDs before joins, missing reports and scaling. This is the
+        # main optimization for Colab debug runs.
+        if max_vehicles is not None:
+            train_ids = self._debug_vehicle_ids(train_tte, max_vehicles, normal_only=True)
+            val_ids = self._debug_vehicle_ids(validation_labels, max_vehicles)
+            test_ids = self._debug_vehicle_ids(test_labels, max_vehicles)
+
+            train_normal = train_op.join(train_ids, on=self.vehicle_col, how="inner")
+            validation_labeled = attach_vehicle_labels(
+                validation_op.join(val_ids, on=self.vehicle_col, how="inner"),
+                validation_labels,
+                vehicle_col=self.vehicle_col,
+            )
+            test_labeled = attach_vehicle_labels(
+                test_op.join(test_ids, on=self.vehicle_col, how="inner"),
+                test_labels,
+                vehicle_col=self.vehicle_col,
+            )
+        else:
+            train_normal = filter_normal_training_vehicles(train_op, train_tte, vehicle_col=self.vehicle_col)
+            validation_labeled = attach_vehicle_labels(validation_op, validation_labels, vehicle_col=self.vehicle_col)
+            test_labeled = attach_vehicle_labels(test_op, test_labels, vehicle_col=self.vehicle_col)
+
+        train_normal = self._persist(train_normal, "train")
+        validation_labeled = self._persist(validation_labeled, "validation")
+        test_labeled = self._persist(test_labeled, "test")
 
         pre_cfg = self.config.get("preprocessing", {})
         exclude = pre_cfg.get("exclude_columns", [])
@@ -200,7 +282,11 @@ class PreprocessingWindowingStage(BaseStage):
 
         analyzer = DataQualityAnalyzer(train_normal)
         missing_report = analyzer.missing_report()
-        constant_cols = analyzer.constant_columns(feature_cols) if pre_cfg.get("drop_constant_columns", True) else []
+        if pre_cfg.get("drop_constant_columns", True):
+            constant_cols = constant_columns_fast(train_normal, feature_cols)
+        else:
+            constant_cols = []
+        self.log.info("Dropped by constant check: %s", len(constant_cols))
 
         train_proc, val_proc, test_proc, scaled_cols, metadata = apply_train_fitted_preprocessing(
             train_df=train_normal,
@@ -213,7 +299,14 @@ class PreprocessingWindowingStage(BaseStage):
             vehicle_col=self.vehicle_col,
             time_col=self.time_col,
             label_col=self.label_col,
+            fill_strategy=str(pre_cfg.get("fill_strategy", "median")),
+            approximate_quantile_relative_error=float(pre_cfg.get("approximate_quantile_relative_error", 0.05)),
         )
+
+        # Original cached raw/label data are no longer needed after scalar preprocessing.
+        train_normal.unpersist()
+        validation_labeled.unpersist()
+        test_labeled.unpersist()
 
         w_cfg = self.config.get("windowing", {})
         builder = SparkWindowBuilder(
@@ -223,9 +316,8 @@ class PreprocessingWindowingStage(BaseStage):
             stride=int(w_cfg.get("stride", 5)),
             label_policy=w_cfg.get("label_policy", "vehicle_label"),
         )
-        max_vehicles = self._max_vehicles()
         label_col = self.label_col
-        partitions = int(w_cfg.get("parquet_partitions", self.config.get("spark", {}).get("shuffle_partitions", 8)))
+        partitions = int(w_cfg.get("parquet_partitions", self._partitions()))
 
         split_dfs = {
             "train": train_proc,
@@ -236,7 +328,7 @@ class PreprocessingWindowingStage(BaseStage):
         split_metadata: dict[str, dict[str, Any]] = {}
         for split, df in split_dfs.items():
             self.log.info("Building %s windows with Spark", split)
-            windows_df = builder.build(df, scaled_cols, max_vehicles=max_vehicles, label_col=label_col)
+            windows_df = builder.build(df, scaled_cols, max_vehicles=None, label_col=label_col)
             output_dir = self._windows_dir(split)
             meta = builder.write_parquet(windows_df, output_dir, partitions=partitions)
             window_paths[f"{split}_windows"] = str(output_dir)
@@ -254,6 +346,7 @@ class PreprocessingWindowingStage(BaseStage):
                 "label_policy": w_cfg.get("label_policy", "vehicle_label"),
                 "execution_mode": self.config.get("execution", {}).get("mode", "debug"),
                 "max_vehicles": max_vehicles,
+                "optimization": "early_debug_filter + scalar_preprocessing + parquet_windows",
             }
         )
         metadata_path = self.ctx.artifact_path("manifests", pre_cfg.get("metadata_file", "preprocessing_metadata.json"))

@@ -76,8 +76,12 @@ class PipelineContext:
     def close(self) -> None:
         if self.spark is not None:
             self.logger.info("Stopping Spark session")
-            self.spark.stop()
-            self.spark = None
+            try:
+                self.spark.stop()
+            except Exception as exc:  # Spark JVM may already be dead after an OOM/Py4J failure.
+                self.logger.warning("Spark session could not be stopped cleanly: %s", exc)
+            finally:
+                self.spark = None
 
     def artifact_path(self, *parts: str | os.PathLike) -> Path:
         path = self.paths.run_dir.joinpath(*map(str, parts))

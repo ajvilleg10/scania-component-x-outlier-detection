@@ -52,3 +52,23 @@ python main.py --config config/config.colab.yaml --stage all --model all --mode 
 ## Nota importante
 
 El pipeline corregido no usa Pandas ni `toPandas()` para procesar el dataset. Spark genera las ventanas en Parquet y PyTorch las lee por batches durante entrenamiento y evaluación.
+
+## Nota de optimización
+
+Si Colab se vuelve lento o aparece `ConnectionRefusedError`, `Py4JNetworkError` o caída de la JVM, normalmente significa que Spark intentó ejecutar un plan demasiado pesado para la memoria disponible. Esta versión mitiga ese problema de tres formas:
+
+1. Filtrado temprano de vehículos en modo `debug`.
+2. Preprocesamiento escalar con Spark, sin `VectorAssembler` ni `StandardScaler`.
+3. Windowing Spark guardado en Parquet particionado.
+
+Secuencia recomendada:
+
+```bash
+python main.py --config config/config.colab.yaml --stage check-data --mode debug
+python main.py --config config/config.colab.yaml --stage eda --mode debug
+python main.py --config config/config.colab.yaml --stage preprocess --mode debug
+python main.py --config config/config.colab.yaml --stage train --model lstm_autoencoder --mode debug
+python main.py --config config/config.colab.yaml --stage evaluate --model lstm_autoencoder --mode debug
+```
+
+Luego subir progresivamente `execution.max_vehicles_debug` antes de ejecutar todos los modelos.

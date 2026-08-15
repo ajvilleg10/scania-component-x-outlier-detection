@@ -515,3 +515,31 @@ pytest -q
 ## 15. Licencia
 
 Uso académico para el desarrollo del TFM.
+
+## Optimización para Google Colab
+
+Esta versión está optimizada para evitar los errores típicos de Colab con Spark, Java, Arrow y memoria del driver.
+
+Cambios clave:
+
+- El pipeline principal no utiliza `toPandas()`.
+- Arrow queda desactivado con `spark.sql.execution.arrow.pyspark.enabled=false`.
+- No se configura `spark.sql.execution.arrow.enabled` porque está deprecado desde Spark 3.x.
+- En modo `debug`, los vehículos se filtran antes de imputar, escalar y construir ventanas.
+- El preprocesamiento usa expresiones escalares de Spark en lugar de `VectorAssembler` + `StandardScaler`.
+- El EDA en debug evita reportes pesados sobre los CSV operacionales completos.
+
+Para una prueba rápida en Colab:
+
+```bash
+python main.py --config config/config.colab.yaml --stage all --model all --mode debug
+```
+
+Para aumentar el tamaño de la muestra debug, modifica:
+
+```yaml
+execution:
+  max_vehicles_debug: 50
+```
+
+Recomendación: primero validar con 50 vehículos, luego 100, y finalmente ejecutar `--mode full` por etapas.

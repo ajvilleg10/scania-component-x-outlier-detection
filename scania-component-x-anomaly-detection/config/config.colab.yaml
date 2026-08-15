@@ -11,7 +11,7 @@ environment:
   primary_execution: google_colab_gpu
 execution:
   mode: debug
-  max_vehicles_debug: 100
+  max_vehicles_debug: 50
   document_sampling_if_used: true
   save_intermediate_artifacts: true
 paths:
@@ -75,10 +75,11 @@ dataset:
 spark:
   app_name: ScaniaComponentXOutlierDetection
   master: local[*]
-  shuffle_partitions: 8
-  driver_memory: 12g
+  shuffle_partitions: 4
+  driver_memory: 10g
   arrow_enabled: false
-  debug_max_to_string_fields: 200
+  debug_max_to_string_fields: 400
+  adaptive_enabled: true
 preprocessing:
   id_col: vehicle_id
   time_col: time_step
@@ -96,12 +97,14 @@ preprocessing:
   - y_true
   - class_label
   - in_study_repair
+  scaling_method: scalar_standard
+  approximate_quantile_relative_error: 0.05
 windowing:
   window_size: 30
   stride: 5
   output_format: parquet
   use_pandas: false
-  parquet_partitions: 8
+  parquet_partitions: 4
   label_policy: vehicle_label
   aggregation_level: vehicle
   analyze_time_irregularity: true
@@ -186,3 +189,16 @@ automation:
     validation y test oficiales.
   - El conjunto test queda reservado exclusivamente para evaluacion final.
   execution_environment: google_colab_drive
+eda:
+  fast_debug: true
+  skip_heavy_operational_reports_in_debug: true
+  skip_exact_counts_in_debug: true
+optimization:
+  early_debug_filter_before_preprocessing: true
+  avoid_spark_ml_vector_scaler: true
+  avoid_to_pandas: true
+  notes:
+  - En modo debug se filtran vehiculos antes de imputacion, escalado y windowing.
+  - El preprocesamiento usa expresiones escalares de Spark para evitar VectorAssembler/StandardScaler.
+  - No se configura spark.sql.execution.arrow.enabled porque esta deprecado desde
+    Spark 3.0.

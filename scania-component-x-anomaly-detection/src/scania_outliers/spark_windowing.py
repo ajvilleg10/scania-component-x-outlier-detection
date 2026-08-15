@@ -7,6 +7,7 @@ from typing import Literal
 try:
     from pyspark.sql import DataFrame
     from pyspark.sql import functions as F
+    from pyspark.storagelevel import StorageLevel
 except Exception:  # pragma: no cover
     DataFrame = object  # type: ignore
 
@@ -134,22 +135,39 @@ class SparkWindowBuilder:
             "y_true",
         )
 
-    def write_parquet(self, windows_df: DataFrame, output_path: str | Path, partitions: int = 8) -> SparkWindowMetadata:
+    def write_parquet(self, windows_df: DataFrame, output_path: str | Path, partitions: int = 4) -> SparkWindowMetadata:
+        """Persist windows to Parquet with minimal recomputation.
+
+        The previous version counted, counted distinct vehicles, inspected one row
+        and then wrote the same expensive window plan again. In Colab this can be
+        very slow. This version persists the window dataframe before those actions,
+        so Spark does not rebuild the collect_list/explode window plan repeatedly.
+        """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        n_windows = windows_df.count()
-        n_vehicles = windows_df.select("vehicle_id").distinct().count()
-        first = windows_df.select("X").head()
-        n_features = 0
-        if first is not None and first["X"]:
-            n_features = len(first["X"][0])
-        (
-            windows_df
-            .repartition(int(partitions))
-            .write
-            .mode("overwrite")
-            .parquet(str(output_path))
-        )
+
+        cached = windows_df.persist(StorageLevel.MEMORY_AND_DISK)
+        try:
+            first = cached.select("X").head()
+            n_features = 0
+            if first is not None and first["X"]:
+                n_features = len(first["X"][0])
+
+            # Repartition only at write time. Counts use the cached dataframe.
+            (
+                cached
+                .repartition(int(partitions), "vehicle_id")
+                .write
+                .mode("overwrite")
+                .parquet(str(output_path))
+            )
+
+            # Metadata is collected after the write from the cached dataframe.
+            n_windows = cached.count()
+            n_vehicles = cached.select("vehicle_id").distinct().count()
+        finally:
+            cached.unpersist()
+
         return SparkWindowMetadata(
             n_windows=n_windows,
             n_vehicles=n_vehicles,
