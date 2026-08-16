@@ -43,7 +43,7 @@ def main() -> None:
         models_dir,
         models_dir / "lstm_autoencoder",
         models_dir / "cnn_lstm_autoencoder",
-        models_dir / "transformer_encoder_simplified",
+        models_dir / "transformer_encoder",
         outputs_dir,
         Path(paths.get("figures_dir", outputs_dir / "figures")),
         Path(paths.get("tables_dir", outputs_dir / "tables")),

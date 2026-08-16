@@ -3,7 +3,7 @@ project:
   package_name: scania_outliers
   seed: 42
   objective: outlier_detection_multivariate_time_series
-  version: 1.2.0
+  version: 2.0.0
 environment:
   platform: google_colab
   use_drive: true
@@ -11,7 +11,7 @@ environment:
   primary_execution: google_colab_gpu
 execution:
   mode: debug
-  max_vehicles_debug: 50
+  max_vehicles_debug: 25
   document_sampling_if_used: true
   save_intermediate_artifacts: true
 paths:
@@ -122,8 +122,8 @@ modeling:
   models:
   - lstm_autoencoder
   - cnn_lstm_autoencoder
-  - transformer_encoder_simplified
-  transformer_encoder_simplified:
+  - transformer_encoder
+  transformer_encoder:
     d_model: 64
     nhead: 4
     num_layers: 2
@@ -173,8 +173,7 @@ evaluation:
   - n_samples
   - n_outliers
 automation:
-  main_command: python main.py --config config/config.colab.yaml --stage all --model
-    all --mode full
+  main_command: python scripts/run_colab_safe.py --config config/config.colab.yaml --mode debug --max-vehicles 25 --prepare-only
   stages:
   - eda
   - preprocess
@@ -202,3 +201,12 @@ optimization:
   - El preprocesamiento usa expresiones escalares de Spark para evitar VectorAssembler/StandardScaler.
   - No se configura spark.sql.execution.arrow.enabled porque esta deprecado desde
     Spark 3.0.
+
+professional_execution:
+  recommended_flow:
+    - prepare_once
+    - train_one_model
+    - evaluate_one_model
+    - compare_at_end
+  train_all_models_together: false
+  reason: En Google Colab se reduce el riesgo de caídas entrenando y evaluando un modelo por ejecución.

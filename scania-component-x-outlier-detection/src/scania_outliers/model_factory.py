@@ -19,16 +19,34 @@ class ModelSpec:
 
 
 class ModelFactory:
-    """Factory that creates the three model families used in the TFM."""
+    """Factory for the three model families used in the TFM.
+
+    Public command names use the same terminology as the dissertation:
+    - lstm_autoencoder
+    - cnn_lstm_autoencoder
+    - transformer_encoder
+
+    The old name `transformer_encoder_simplified` is still accepted as an alias
+    so older commands do not break, but all outputs are stored with the canonical
+    `transformer_encoder` name.
+    """
 
     SUPPORTED = {
         "lstm_autoencoder": ModelSpec("lstm_autoencoder", "Recurrent reconstruction baseline."),
         "cnn_lstm_autoencoder": ModelSpec("cnn_lstm_autoencoder", "Hybrid local-temporal reconstruction model."),
-        "transformer_encoder_simplified": ModelSpec("transformer_encoder_simplified", "Regularized Transformer encoder autoencoder."),
+        "transformer_encoder": ModelSpec("transformer_encoder", "Simplified Transformer encoder autoencoder."),
+    }
+    ALIASES = {
+        "transformer_encoder_simplified": "transformer_encoder",
     }
 
     @classmethod
+    def canonical_name(cls, model_name: str) -> str:
+        return cls.ALIASES.get(model_name, model_name)
+
+    @classmethod
     def create(cls, model_name: str, n_features: int, window_size: int, config: dict[str, Any]) -> nn.Module:
+        model_name = cls.canonical_name(model_name)
         if model_name not in cls.SUPPORTED:
             raise ValueError(f"Unsupported model '{model_name}'. Valid: {list(cls.SUPPORTED)}")
 
@@ -53,7 +71,7 @@ class ModelFactory:
                 dropout=float(modeling.get("dropout", 0.1)),
             )
 
-        tr = modeling.get("transformer_encoder_simplified", {})
+        tr = modeling.get("transformer_encoder", modeling.get("transformer_encoder_simplified", {}))
         return TransformerLiteAutoencoder(
             n_features=n_features,
             d_model=int(tr.get("d_model", 64)),
@@ -68,8 +86,15 @@ class ModelFactory:
 
     @classmethod
     def resolve_requested_models(cls, requested: str, config: dict[str, Any]) -> list[str]:
+        requested = cls.canonical_name(requested)
         if requested == "all":
-            return [m for m in config.get("modeling", {}).get("models", list(cls.SUPPORTED)) if m in cls.SUPPORTED]
+            configured = config.get("modeling", {}).get("models", list(cls.SUPPORTED))
+            resolved = []
+            for model_name in configured:
+                canonical = cls.canonical_name(model_name)
+                if canonical in cls.SUPPORTED and canonical not in resolved:
+                    resolved.append(canonical)
+            return resolved
         if requested not in cls.SUPPORTED:
             raise ValueError(f"Unsupported model '{requested}'. Valid: all or {list(cls.SUPPORTED)}")
         return [requested]

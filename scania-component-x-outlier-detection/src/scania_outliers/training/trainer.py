@@ -28,7 +28,7 @@ def resolve_device(device: str = "auto") -> torch.device:
 
 
 class AutoencoderTrainer:
-    """Generic trainer for reconstruction-based anomaly detection models."""
+    """Generic trainer for reconstruction-based outlier detection models."""
 
     def __init__(self, model: nn.Module, config: TrainingConfig):
         self.model = model
