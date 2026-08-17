@@ -503,7 +503,9 @@ class EvaluationStage(BaseStage):
             save_json(window_metrics, self.ctx.paths.metrics_dir / f"{model_name}_{split}_window_metrics.json")
             output["models"][model_name] = {"vehicle_metrics": vehicle_metrics, "window_metrics": window_metrics}
 
-        comparison_path = self.ctx.paths.metrics_dir / f"comparison_{split}.csv"
+        comparisons_dir = self.ctx.paths.outputs_dir / "comparisons"
+        comparisons_dir.mkdir(parents=True, exist_ok=True)
+        comparison_path = comparisons_dir / f"comparison_{split}.csv"
         save_rows_csv(all_metrics, comparison_path)
         output["comparison_path"] = str(comparison_path)
         self.ctx.save_stage_manifest("evaluate", output)
@@ -522,6 +524,8 @@ class ComparisonStage(BaseStage):
                 rows.append(json.load(f))
         if not rows:
             return {"message": "No metric JSON files found", "metrics_dir": str(metrics_dir)}
-        out_path = metrics_dir / "comparison_all_models.csv"
+        comparisons_dir = self.ctx.paths.outputs_dir / "comparisons"
+        comparisons_dir.mkdir(parents=True, exist_ok=True)
+        out_path = comparisons_dir / "comparison_all_models.csv"
         save_rows_csv(rows, out_path)
-        return {"comparison_path": str(out_path), "n_rows": len(rows)}
+        return {"comparison_path": str(out_path), "n_rows": len(rows), "metrics_dir": str(metrics_dir)}

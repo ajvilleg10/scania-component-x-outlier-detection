@@ -115,6 +115,12 @@ El proyecto espera esta estructura persistente:
 │   ├── logs/
 │   └── runs/
 ├── experiments/
+│   └── runs/
+│       ├── debug_025/
+│       ├── debug_050/
+│       ├── debug_100/
+│       ├── debug_200/
+│       └── full/
 └── doc/
 ```
 
@@ -224,6 +230,7 @@ Primero usar una muestra pequeña:
   --config config/config.colab.yaml \
   --mode debug \
   --max-vehicles 25 \
+  --run-name debug_025 \
   --model lstm_autoencoder \
   --prepare-only
 ```
@@ -244,6 +251,7 @@ Esta fase ejecuta:
   --config config/config.colab.yaml \
   --mode debug \
   --max-vehicles 25 \
+  --run-name debug_025 \
   --model lstm_autoencoder \
   --skip-download \
   --skip-eda \
@@ -257,6 +265,7 @@ Esta fase ejecuta:
   --config config/config.colab.yaml \
   --mode debug \
   --max-vehicles 25 \
+  --run-name debug_025 \
   --model cnn_lstm_autoencoder \
   --skip-download \
   --skip-eda \
@@ -270,6 +279,7 @@ Esta fase ejecuta:
   --config config/config.colab.yaml \
   --mode debug \
   --max-vehicles 25 \
+  --run-name debug_025 \
   --model transformer_encoder \
   --skip-download \
   --skip-eda \
@@ -282,6 +292,7 @@ Esta fase ejecuta:
 !python scripts/run_colab_safe.py \
   --config config/config.colab.yaml \
   --mode debug \
+  --run-name debug_025 \
   --compare-only
 ```
 
@@ -292,11 +303,11 @@ Esta fase ejecuta:
 No pasar directamente a `full`. Usar esta progresión:
 
 ```text
-debug 25 vehículos
-debug 50 vehículos
-debug 100 vehículos
-debug 200 vehículos
-full por etapas
+debug_025 → 25 vehículos
+debug_050 → 50 vehículos
+debug_100 → 100 vehículos
+debug_200 → 200 vehículos
+full      → todos los vehículos disponibles
 ```
 
 Ejemplo:
@@ -306,12 +317,43 @@ Ejemplo:
   --config config/config.colab.yaml \
   --mode debug \
   --max-vehicles 100 \
+  --run-name debug_100 \
   --model lstm_autoencoder \
   --prepare-only \
   --skip-download
 ```
 
 ---
+
+## 8.1. Conservación automática de resultados con `--run-name`
+
+El argumento `--run-name` evita que los resultados de una corrida se pierdan cuando se ejecuta otra. Al finalizar cada fase, el runner copia los artefactos disponibles hacia:
+
+```text
+/content/drive/MyDrive/TFM_SCANIA/experiments/runs/<run-name>/
+```
+
+Ejemplo para `debug_025`:
+
+```text
+experiments/runs/debug_025/
+├── config_used.yaml
+├── run_metadata.json
+├── run_events.jsonl
+├── logs/
+├── metrics/
+├── comparisons/
+├── predictions/
+├── figures/
+├── tables/
+├── models/
+└── processed/
+    ├── metadata/
+    └── manifests/
+```
+
+Por defecto no se copian las ventanas Parquet para no duplicar demasiado espacio en Drive. Si se desea archivar también las ventanas, se puede añadir `--archive-windows`, aunque no se recomienda para cada debug por tamaño.
+
 
 ## 9. Ejecución en modo full
 
@@ -323,6 +365,7 @@ Preparar datos completos:
 !python scripts/run_colab_safe.py \
   --config config/config.full.yaml \
   --mode full \
+  --run-name full \
   --model lstm_autoencoder \
   --prepare-only \
   --skip-download
@@ -334,6 +377,7 @@ Entrenar LSTM:
 !python scripts/run_colab_safe.py \
   --config config/config.full.yaml \
   --mode full \
+  --run-name full \
   --model lstm_autoencoder \
   --skip-download \
   --skip-eda \
@@ -346,6 +390,7 @@ Entrenar CNN-LSTM:
 !python scripts/run_colab_safe.py \
   --config config/config.full.yaml \
   --mode full \
+  --run-name full \
   --model cnn_lstm_autoencoder \
   --skip-download \
   --skip-eda \
@@ -358,6 +403,7 @@ Entrenar Transformer:
 !python scripts/run_colab_safe.py \
   --config config/config.full.yaml \
   --mode full \
+  --run-name full \
   --model transformer_encoder \
   --skip-download \
   --skip-eda \
@@ -370,6 +416,7 @@ Comparar:
 !python scripts/run_colab_safe.py \
   --config config/config.full.yaml \
   --mode full \
+  --run-name full \
   --compare-only
 ```
 
@@ -400,8 +447,10 @@ Por seguridad, el CLI bloquea `--model all` en etapas pesadas si no se pasa expl
 | `models/<modelo>/` | Pesos del modelo y umbral seleccionado |
 | `outputs/metrics/` | Métricas JSON/CSV |
 | `outputs/predictions/` | Predicciones por ventana y vehículo |
-| `outputs/logs/` | Logs de ejecución segura |
-| `outputs/runs/` | Manifiestos de cada etapa |
+| `outputs/logs/` | Logs de ejecución segura más reciente |
+| `outputs/comparisons/` | Comparaciones generadas por el stage `compare` |
+| `outputs/runs/` | Manifiestos de etapas individuales |
+| `experiments/runs/<run-name>/` | Copia archivada de resultados por corrida |
 
 ---
 
@@ -415,7 +464,7 @@ Por seguridad, el CLI bloquea `--model all` en etapas pesadas si no se pasa expl
 - Preprocesamiento ajustado únicamente con `train`.
 - Umbral seleccionado con `validation`.
 - Evaluación final con `test`.
-- Logs y manifiestos para trazabilidad.
+- Logs, manifiestos y archivo automático por `--run-name` para trazabilidad.
 - Ventanas guardadas en formato Parquet particionado.
 - Pruebas unitarias básicas en `tests/`.
 

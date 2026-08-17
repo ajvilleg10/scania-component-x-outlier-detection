@@ -19,6 +19,7 @@ python scripts/run_colab_safe.py \
   --config config/config.colab.yaml \
   --mode debug \
   --max-vehicles 25 \
+  --run-name debug_025 \
   --model lstm_autoencoder \
   --prepare-only
 ```
@@ -30,6 +31,7 @@ python scripts/run_colab_safe.py \
   --config config/config.colab.yaml \
   --mode debug \
   --max-vehicles 25 \
+  --run-name debug_025 \
   --model lstm_autoencoder \
   --skip-download --skip-eda --skip-preprocess
 ```
@@ -39,6 +41,7 @@ python scripts/run_colab_safe.py \
   --config config/config.colab.yaml \
   --mode debug \
   --max-vehicles 25 \
+  --run-name debug_025 \
   --model cnn_lstm_autoencoder \
   --skip-download --skip-eda --skip-preprocess
 ```
@@ -48,6 +51,7 @@ python scripts/run_colab_safe.py \
   --config config/config.colab.yaml \
   --mode debug \
   --max-vehicles 25 \
+  --run-name debug_025 \
   --model transformer_encoder \
   --skip-download --skip-eda --skip-preprocess
 ```
@@ -58,18 +62,40 @@ python scripts/run_colab_safe.py \
 python scripts/run_colab_safe.py \
   --config config/config.colab.yaml \
   --mode debug \
+  --run-name debug_025 \
   --compare-only
 ```
+
+
+## Archivo automático por corrida
+
+Usar siempre `--run-name` para conservar los resultados de cada tamaño de prueba. El runner archiva los artefactos disponibles en:
+
+```text
+/content/drive/MyDrive/TFM_SCANIA/experiments/runs/<run-name>/
+```
+
+Nombres recomendados:
+
+| Ejecución | Comando | Carpeta de archivo |
+|---|---|---|
+| Debug 25 | `--max-vehicles 25 --run-name debug_025` | `experiments/runs/debug_025/` |
+| Debug 50 | `--max-vehicles 50 --run-name debug_050` | `experiments/runs/debug_050/` |
+| Debug 100 | `--max-vehicles 100 --run-name debug_100` | `experiments/runs/debug_100/` |
+| Debug 200 | `--max-vehicles 200 --run-name debug_200` | `experiments/runs/debug_200/` |
+| Full | `--mode full --run-name full` | `experiments/runs/full/` |
+
+Por defecto no se copian las ventanas Parquet para evitar duplicar archivos grandes. Para archivarlas explícitamente se puede añadir `--archive-windows`.
 
 ## Escalado
 
 Subir gradualmente:
 
-- 25 vehículos
-- 50 vehículos
-- 100 vehículos
-- 200 vehículos
-- full por etapas
+- `debug_025`: 25 vehículos
+- `debug_050`: 50 vehículos
+- `debug_100`: 100 vehículos
+- `debug_200`: 200 vehículos
+- `full`: todos los vehículos disponibles, por etapas
 
 ## Reanudación
 
@@ -87,4 +113,40 @@ python scripts/run_colab_safe.py \
   --mode debug \
   --model lstm_autoencoder \
   --evaluate-only
+```
+
+
+## Ejemplo completo para `debug_050`
+
+```bash
+python scripts/run_colab_safe.py \
+  --config config/config.colab.yaml \
+  --mode debug \
+  --max-vehicles 50 \
+  --run-name debug_050 \
+  --model lstm_autoencoder \
+  --prepare-only \
+  --skip-download
+```
+
+Luego se entrenan los modelos uno a uno reutilizando el mismo `--run-name debug_050`:
+
+```bash
+python scripts/run_colab_safe.py \
+  --config config/config.colab.yaml \
+  --mode debug \
+  --max-vehicles 50 \
+  --run-name debug_050 \
+  --model lstm_autoencoder \
+  --skip-download --skip-eda --skip-preprocess
+```
+
+Finalmente:
+
+```bash
+python scripts/run_colab_safe.py \
+  --config config/config.colab.yaml \
+  --mode debug \
+  --run-name debug_050 \
+  --compare-only
 ```
