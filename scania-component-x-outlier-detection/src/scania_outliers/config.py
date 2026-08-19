@@ -7,7 +7,6 @@ import yaml
 
 
 def load_config(config_path: str | Path = "config/config.colab.yaml") -> Dict[str, Any]:
-    """Load a YAML configuration file."""
     path = Path(config_path)
     if not path.exists():
         raise FileNotFoundError(f"Configuration file not found: {path}")
@@ -16,17 +15,26 @@ def load_config(config_path: str | Path = "config/config.colab.yaml") -> Dict[st
 
 
 def ensure_directories(config: Dict[str, Any]) -> None:
-    """Create Drive/output directories declared in the configuration when available."""
-    path_config = config.get("paths", {})
-    for key, value in path_config.items():
-        if key.endswith("_dir") or key.endswith("_root"):
-            try:
-                Path(value).mkdir(parents=True, exist_ok=True)
-            except Exception:
-                # Google Drive paths may not exist before mounting Colab.
-                pass
+    """Create only shared runtime roots.
+
+    Run-specific result folders are intentionally created lazily by PipelineContext
+    so Drive does not accumulate empty directories that are never used.
+    """
+    p = config.get("paths", {})
+    candidates = [
+        p.get("drive_root"),
+        p.get("raw_dir"),
+        p.get("processed_dir"),
+        p.get("experiments_dir"),
+    ]
+    for value in candidates:
+        if not value:
+            continue
+        try:
+            Path(value).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
 
 
 def get_dataset_files(config: Dict[str, Any]) -> Dict[str, str]:
-    """Return configured dataset file map."""
     return dict(config.get("dataset", {}).get("files", {}))

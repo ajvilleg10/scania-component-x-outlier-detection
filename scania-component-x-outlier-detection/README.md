@@ -1,46 +1,23 @@
-# SCANIA Component X - Outlier Detection
+# SCANIA Component X — Detección de outliers temporales multivariados
 
-Proyecto de TFM para la **detección de outliers temporales multivariados** en lecturas operacionales del dataset **SCANIA Component X**, orientado a un contexto de mantenimiento predictivo en vehículos pesados.
+Proyecto experimental del TFM orientado a comparar **LSTM Autoencoder**, **CNN-LSTM Autoencoder** y **Transformer Encoder simplificado** sobre las series temporales multivariadas del dataset SCANIA Component X.
 
-El proyecto está diseñado para ejecutarse en **Google Colab + Google Drive**. Spark se utiliza para la ingesta, validación, análisis exploratorio, preprocesamiento y construcción de ventanas temporales. PyTorch se utiliza para el entrenamiento de los modelos de aprendizaje profundo.
+La arquitectura separa de forma explícita el **código versionado en Git** de los **datos y artefactos experimentales persistidos en Google Drive**. El procesamiento se realiza con PySpark, las ventanas se almacenan en Parquet y el modelado se realiza con PyTorch. El pipeline principal no utiliza `toPandas()`.
 
----
+## 1. Principios del proyecto
 
-## 1. Objetivo del proyecto
+- Se respetan las particiones oficiales `train`, `validation` y `test`; no se crea un nuevo `train_test_split` ni se aplica validación cruzada.
+- El preprocesamiento se ajusta únicamente con `train`.
+- `validation` se emplea para control del entrenamiento y selección del umbral de outlier.
+- `test` queda reservado para la evaluación final.
+- Para la evaluación binaria del TFM, `class_label=0` se usa como grupo de referencia negativo y las clases temporales oficiales `1..4` se agrupan como grupo positivo; las cinco clases originales se conservan en el EDA.
+- Los modelos se ejecutan **uno por uno** en Colab.
+- `--prepare-only` se ejecuta una sola vez por experimento y **no requiere `--model`**.
+- `--run-name` identifica y separa cada experimento (`debug_025`, `debug_050`, `debug_100`, `debug_200`, `full`).
+- Cada run conserva sus modelos, métricas, predicciones, figuras, tablas, logs, configuración y manifiestos.
+- Las ventanas Parquet son un **working cache compartido** en `data/processed/windows`; antes de entrenar se valida que correspondan al `run-name` activo.
 
-Diseñar, implementar y evaluar tres modelos de aprendizaje profundo para detectar trayectorias operacionales atípicas en series temporales multivariadas:
-
-- `lstm_autoencoder`
-- `cnn_lstm_autoencoder`
-- `transformer_encoder`
-
-El análisis respeta las particiones oficiales del dataset:
-
-| Partición | Uso |
-|---|---|
-| `train` | Ajuste del preprocesamiento y entrenamiento de modelos |
-| `validation` | Control de entrenamiento, selección de umbral y ajuste de configuración |
-| `test` | Evaluación final |
-
-No se realiza `train_test_split`, `k-fold` ni validación cruzada adicional.
-
----
-
-## 2. Principios de diseño
-
-El proyecto sigue estas decisiones técnicas:
-
-- El código fuente se ejecuta desde `/content` para evitar lentitud al ejecutar directamente desde Drive.
-- Los datos, modelos, métricas y logs se guardan en Google Drive.
-- El pipeline principal no usa `toPandas()` sobre datos grandes.
-- Las ventanas temporales se generan con Spark y se guardan como Parquet particionado.
-- Los modelos se entrenan **uno a uno** para reducir el riesgo de caídas en Colab.
-- El conjunto `test` queda reservado exclusivamente para evaluación final.
-- Todas las etapas guardan artefactos y logs para facilitar trazabilidad.
-
----
-
-## 3. Estructura del proyecto
+## 2. Estructura del repositorio Git
 
 ```text
 scania-component-x-outlier-detection/
@@ -48,49 +25,21 @@ scania-component-x-outlier-detection/
 ├── README.md
 ├── requirements.txt
 ├── pyproject.toml
+├── .gitignore
 ├── CHANGELOG_TFM.md
 ├── config/
-│   ├── config.colab.yaml
-│   ├── config.debug.yaml
-│   └── config.full.yaml
-├── notebooks/
-│   ├── 00_run_full_pipeline_colab.ipynb
-│   ├── 01_exploratory_analysis.ipynb
-│   ├── 02_visual_results.ipynb
-│   └── 03_model_interpretation.ipynb
 ├── scripts/
-│   ├── create_drive_folders.py
-│   ├── download_kaggle_to_drive.py
-│   ├── check_raw_files.py
-│   ├── check_environment.py
-│   ├── run_colab_safe.py
-│   └── compare_metrics.py
-├── src/scania_outliers/
-│   ├── cli.py
-│   ├── config.py
-│   ├── data_loader.py
-│   ├── data_quality.py
-│   ├── preprocessing.py
-│   ├── spark_session.py
-│   ├── spark_windowing.py
-│   ├── datasets.py
-│   ├── labels.py
-│   ├── model_factory.py
-│   ├── model_evaluation.py
-│   ├── outlier_detection.py
-│   ├── vehicle_level.py
-│   ├── pipelines/
-│   ├── models/
-│   └── training/
+├── src/
 ├── tests/
+├── notebooks/
 └── docs/
 ```
 
----
+El repositorio **no contiene** `data/`, `models/`, `outputs/` ni `reports/`. Esos artefactos se generan en Drive y no deben versionarse en Git.
 
-## 4. Estructura esperada en Google Drive
+## 3. Estructura en Google Drive
 
-El proyecto espera esta estructura persistente:
+El proyecto crea solo las carpetas necesarias. Las subcarpetas de resultados se crean cuando realmente contienen artefactos.
 
 ```text
 /content/drive/MyDrive/TFM_SCANIA/
@@ -103,70 +52,70 @@ El proyecto espera esta estructura persistente:
 │       │   └── test/
 │       ├── metadata/
 │       └── manifests/
+└── experiments/
+    ├── runs/
+    │   ├── debug_025/
+    │   ├── debug_050/
+    │   ├── debug_100/
+    │   ├── debug_200/
+    │   └── full/
+    └── study_summary/   # se crea solo al ejecutar --study-summary
+```
+
+Una ejecución completa queda, por ejemplo, así:
+
+```text
+experiments/runs/debug_025/
+├── config_used.yaml
+├── runner_events.jsonl
 ├── models/
 │   ├── lstm_autoencoder/
 │   ├── cnn_lstm_autoencoder/
 │   └── transformer_encoder/
-├── outputs/
-│   ├── metrics/
-│   ├── predictions/
-│   ├── figures/
-│   ├── comparisons/
-│   ├── logs/
-│   └── runs/
-├── experiments/
-│   └── runs/
-│       ├── debug_025/
-│       ├── debug_050/
-│       ├── debug_100/
-│       ├── debug_200/
-│       └── full/
-└── doc/
+├── metrics/
+├── predictions/
+├── comparisons/
+├── figures/
+│   ├── eda/
+│   ├── preprocessing/
+│   ├── training/
+│   ├── evaluation/
+│   └── comparison/
+├── tables/
+│   ├── eda/
+│   ├── preprocessing/
+│   └── report/
+├── logs/
+└── manifests/
 ```
 
----
+## 4. Figuras generadas
 
-## 5. Archivos requeridos en `data/raw`
+El pipeline genera automáticamente evidencia visual útil para el TFM.
 
-Antes de ejecutar el pipeline, estos archivos deben estar en:
+**EDA:** distribución original de las cinco clases temporales, distribución binaria usada en la evaluación, distribuciones de variables, box plots, matriz de correlación de variables seleccionadas, distribución de lecturas por vehículo y gráficos de valores faltantes cuando se calcula el reporte completo.
 
-```text
-/content/drive/MyDrive/TFM_SCANIA/data/raw
-```
+**Preprocesamiento:** resumen de variables seleccionadas/descartadas y número de ventanas generadas por partición.
 
-```text
-train_operational_readouts.csv
-train_tte.csv
-train_specifications.csv
-validation_operational_readouts.csv
-validation_labels.csv
-validation_specifications.csv
-test_operational_readouts.csv
-test_labels.csv
-test_specifications.csv
-```
+**Entrenamiento:** curvas `train_loss` y `validation_loss` por modelo.
 
-El script `download_kaggle_to_drive.py` descarga el dataset con KaggleHub y copia los CSV desde la caché temporal de Colab hacia `Drive/data/raw`.
+**Evaluación:** matriz de confusión, curva Precision-Recall, curva ROC, distribución de outlier scores y box plot de scores por clase, calculados con la referencia final a nivel vehículo. A nivel ventana se guardan scores y predicciones para análisis temporal, pero no Precision/Recall/F1 supervisados porque no existen etiquetas de anomalía por ventana.
 
----
+**Comparación:** comparación conjunta de Precision, Recall, F1, PR-AUC y ROC-AUC y comparación de tiempos de entrenamiento/inferencia.
 
-## 6. Preparación en Google Colab
+Las figuras de EDA sobre las variables operacionales usan una muestra acotada y configurable para visualización. Esa muestra **no se utiliza para calcular las métricas finales de los modelos**.
 
-### 6.1. Activar GPU
+La conversión de `class_label` a referencia binaria se documenta explícitamente: la clase 0 representa lecturas situadas a más de 48 `time_step` del fallo, mientras que las clases 1–4 corresponden a ventanas progresivamente más próximas al fallo y se agrupan como positivas para la evaluación de detección de outliers. Esta referencia sirve para contrastar los scores del modelo y no implica que el dataset proporcione etiquetas puntuales de anomalía para cada lectura.
 
-En Colab:
+## 5. Preparación de Google Colab
 
-```text
-Entorno de ejecución → Cambiar tipo de entorno de ejecución → GPU
-```
+Active una GPU desde la interfaz de Colab y ejecute:
 
-Verificar:
-
-```bash
+```python
 !nvidia-smi
 ```
 
-### 6.2. Instalar Java 17
+Instale Java 17:
 
 ```python
 !apt-get update -qq
@@ -179,338 +128,187 @@ os.environ["PATH"] = os.environ["JAVA_HOME"] + "/bin:" + os.environ["PATH"]
 !java -version
 ```
 
-### 6.3. Montar Google Drive
+Monte Drive:
 
 ```python
 from google.colab import drive
 drive.mount("/content/drive")
 ```
 
-### 6.4. Descomprimir el proyecto en `/content`
-
-```bash
-!rm -rf /content/scania-component-x-outlier-detection
-
-!unzip -q "/content/drive/MyDrive/TFM_SCANIA/project/scania-component-x-outlier-detection-tfm-professional.zip" \
-  -d /content/scania-component-x-outlier-detection
-```
-
-Entrar al proyecto:
+Clone el repositorio:
 
 ```python
-%cd /content/scania-component-x-outlier-detection/scania-component-x-outlier-detection
+%cd /content
+!rm -rf scania-component-x-outlier-detection
+!git clone https://github.com/TU_USUARIO/scania-component-x-outlier-detection.git
+%cd /content/scania-component-x-outlier-detection
 ```
 
-Verificar:
+Instale dependencias:
 
-```bash
-!ls
-```
-
-Deben aparecer `main.py`, `config`, `scripts`, `src` y `README.md`.
-
-### 6.5. Instalar dependencias
-
-```bash
+```python
 !pip install -q -r requirements.txt
 ```
 
----
+## 6. Flujo profesional de un experimento
 
-## 7. Ejecución recomendada
-
-La ejecución recomendada en Colab es **por fases**, no todo de una sola vez.
-
-### 7.1. Preparar datos una sola vez
-
-Primero usar una muestra pequeña:
+### 6.1 Preparar `debug_025` una sola vez
 
 ```bash
-!python scripts/run_colab_safe.py \
+python scripts/run_colab_safe.py \
   --config config/config.colab.yaml \
   --mode debug \
-  --max-vehicles 25 \
   --run-name debug_025 \
-  --model lstm_autoencoder \
   --prepare-only
 ```
 
-Esta fase ejecuta:
+`--prepare-only` crea/verifica las carpetas compartidas, reutiliza los CSV si ya existen, descarga desde KaggleHub solo cuando faltan, valida los nueve archivos, ejecuta EDA, preprocesa y genera las ventanas Parquet. No entrena ningún modelo.
 
-1. Creación de carpetas en Drive.
-2. Descarga del dataset desde Kaggle si aplica.
-3. Validación de archivos raw.
-4. EDA en modo seguro.
-5. Preprocesamiento con Spark.
-6. Construcción de ventanas Parquet.
-
-### 7.2. Entrenar y evaluar LSTM Autoencoder
+### 6.2 LSTM Autoencoder
 
 ```bash
-!python scripts/run_colab_safe.py \
+python scripts/run_colab_safe.py \
   --config config/config.colab.yaml \
   --mode debug \
-  --max-vehicles 25 \
   --run-name debug_025 \
-  --model lstm_autoencoder \
-  --skip-download \
-  --skip-eda \
-  --skip-preprocess
+  --model lstm_autoencoder
 ```
 
-### 7.3. Entrenar y evaluar CNN-LSTM Autoencoder
+### 6.3 CNN-LSTM Autoencoder
 
 ```bash
-!python scripts/run_colab_safe.py \
+python scripts/run_colab_safe.py \
   --config config/config.colab.yaml \
   --mode debug \
-  --max-vehicles 25 \
   --run-name debug_025 \
-  --model cnn_lstm_autoencoder \
-  --skip-download \
-  --skip-eda \
-  --skip-preprocess
+  --model cnn_lstm_autoencoder
 ```
 
-### 7.4. Entrenar y evaluar Transformer Encoder
+### 6.4 Transformer Encoder
 
 ```bash
-!python scripts/run_colab_safe.py \
+python scripts/run_colab_safe.py \
   --config config/config.colab.yaml \
   --mode debug \
-  --max-vehicles 25 \
   --run-name debug_025 \
-  --model transformer_encoder \
-  --skip-download \
-  --skip-eda \
-  --skip-preprocess
+  --model transformer_encoder
 ```
 
-### 7.5. Comparar resultados
+Cada comando de modelo ejecuta **entrenamiento + evaluación** usando las ventanas ya preparadas. No se necesitan `--skip-download`, `--skip-eda` ni `--skip-preprocess`.
+
+### 6.5 Comparar los tres modelos
 
 ```bash
-!python scripts/run_colab_safe.py \
+python scripts/run_colab_safe.py \
   --config config/config.colab.yaml \
   --mode debug \
   --run-name debug_025 \
   --compare-only
 ```
 
----
+La comparación exige, por defecto, métricas a nivel vehículo de los tres modelos.
 
-## 8. Escalado progresivo
-
-No pasar directamente a `full`. Usar esta progresión:
-
-```text
-debug_025 → 25 vehículos
-debug_050 → 50 vehículos
-debug_100 → 100 vehículos
-debug_200 → 200 vehículos
-full      → todos los vehículos disponibles
-```
-
-Ejemplo:
+### 6.6 Cerrar el run con el resumen de artefactos
 
 ```bash
-!python scripts/run_colab_safe.py \
+python scripts/run_colab_safe.py \
   --config config/config.colab.yaml \
   --mode debug \
-  --max-vehicles 100 \
-  --run-name debug_100 \
-  --model lstm_autoencoder \
-  --prepare-only \
-  --skip-download
+  --run-name debug_025 \
+  --report-only
 ```
 
----
+## 7. Repetir el background experimental
 
-## 8.1. Conservación automática de resultados con `--run-name`
-
-El argumento `--run-name` evita que los resultados de una corrida se pierdan cuando se ejecuta otra. Al finalizar cada fase, el runner copia los artefactos disponibles hacia:
+Repita exactamente el mismo flujo cambiando el `--run-name` (`debug_025`, `debug_050`, `debug_100` o `debug_200`).
 
 ```text
-/content/drive/MyDrive/TFM_SCANIA/experiments/runs/<run-name>/
+debug_025  -> 25 vehículos
+debug_050  -> 50 vehículos
+debug_100  -> 100 vehículos
+debug_200  -> 200 vehículos
+full       -> todos los datos
 ```
 
-Ejemplo para `debug_025`:
+Cuando el `run-name` sigue el patrón `debug_NNN`, el runner infiere automáticamente el número de vehículos. Por ello, `--max-vehicles` es opcional en el flujo recomendado; si se proporciona, el script valida que sea coherente con el nombre del run.
 
-```text
-experiments/runs/debug_025/
-├── config_used.yaml
-├── run_metadata.json
-├── run_events.jsonl
-├── logs/
-├── metrics/
-├── comparisons/
-├── predictions/
-├── figures/
-├── tables/
-├── models/
-└── processed/
-    ├── metadata/
-    └── manifests/
-```
-
-Por defecto no se copian las ventanas Parquet para no duplicar demasiado espacio en Drive. Si se desea archivar también las ventanas, se puede añadir `--archive-windows`, aunque no se recomienda para cada debug por tamaño.
-
-
-## 9. Ejecución en modo full
-
-En modo full se recomienda ejecutar **un modelo por corrida**.
-
-Preparar datos completos:
+Ejemplo para preparar 50 vehículos:
 
 ```bash
-!python scripts/run_colab_safe.py \
+python scripts/run_colab_safe.py \
+  --config config/config.colab.yaml \
+  --mode debug \
+  --run-name debug_050 \
+  --prepare-only
+```
+
+Después ejecute los tres modelos, `--compare-only` y `--report-only` con el mismo `debug_050`.
+
+## 8. Ejecución final `full`
+
+Prepare:
+
+```bash
+python scripts/run_colab_safe.py \
   --config config/config.full.yaml \
   --mode full \
   --run-name full \
-  --model lstm_autoencoder \
-  --prepare-only \
-  --skip-download
+  --prepare-only
 ```
 
-Entrenar LSTM:
+Entrene/evalúe cada modelo de forma independiente:
 
 ```bash
-!python scripts/run_colab_safe.py \
+python scripts/run_colab_safe.py --config config/config.full.yaml --mode full --run-name full --model lstm_autoencoder
+python scripts/run_colab_safe.py --config config/config.full.yaml --mode full --run-name full --model cnn_lstm_autoencoder
+python scripts/run_colab_safe.py --config config/config.full.yaml --mode full --run-name full --model transformer_encoder
+```
+
+Compare y cierre el run:
+
+```bash
+python scripts/run_colab_safe.py --config config/config.full.yaml --mode full --run-name full --compare-only
+python scripts/run_colab_safe.py --config config/config.full.yaml --mode full --run-name full --report-only
+```
+
+### 8.1 Consolidar el background completo del TFM
+
+Después de disponer de los runs `debug_025`, `debug_050`, `debug_100`, `debug_200` y `full`, genere una síntesis transversal:
+
+```bash
+python scripts/run_colab_safe.py \
   --config config/config.full.yaml \
-  --mode full \
-  --run-name full \
-  --model lstm_autoencoder \
-  --skip-download \
-  --skip-eda \
-  --skip-preprocess
+  --study-summary
 ```
 
-Entrenar CNN-LSTM:
+El comando crea `experiments/study_summary/` con una tabla de métricas de todos los runs, el mejor modelo por ejecución y gráficas de evolución de PR-AUC, F1-score y Recall. Esta síntesis documenta el desarrollo progresivo; la interpretación principal del TFM sigue correspondiendo a `full`.
+
+## 9. Recuperación de etapas
+
+El flujo normal no necesita flags de salto. Para recuperación se mantienen dos comandos especializados:
 
 ```bash
-!python scripts/run_colab_safe.py \
-  --config config/config.full.yaml \
-  --mode full \
-  --run-name full \
-  --model cnn_lstm_autoencoder \
-  --skip-download \
-  --skip-eda \
-  --skip-preprocess
+# Solo reentrenar
+python scripts/run_colab_safe.py ... --model lstm_autoencoder --train-only
+
+# Solo reevaluar un modelo ya entrenado
+python scripts/run_colab_safe.py ... --model lstm_autoencoder --evaluate-only
 ```
 
-Entrenar Transformer:
+## 10. Protección frente a mezclas de runs
+
+`data/processed/windows` funciona como caché de trabajo. Al terminar `--prepare-only`, el proyecto registra el `run-name`, el modo, el tamaño debug y una huella de la configuración. Antes de entrenar o evaluar, se valida esa huella. Si las ventanas activas pertenecen a otro experimento, el proceso se detiene y solicita volver a ejecutar `--prepare-only`.
+
+Esto evita, por ejemplo, entrenar accidentalmente `debug_025` sobre ventanas generadas para `debug_100`.
+
+## 11. Resultados del TFM
+
+Los runs `debug_025`, `debug_050`, `debug_100` y `debug_200` sirven como evidencia del desarrollo progresivo, estabilidad y escalado del pipeline. En validation/test, el modo debug aplica una selección determinista aproximadamente estratificada y garantiza un mínimo pequeño de casos positivos para que las métricas puedan ejercitarse incluso con 25 vehículos. Por ello, estas métricas se interpretan como resultados de validación técnica, no como estimaciones finales. Las métricas de `full` constituyen la comparación experimental principal. Al mantenerse separados por `--run-name`, los resultados anteriores no se pierden cuando se ejecuta el siguiente tamaño.
+
+## 12. Tests
 
 ```bash
-!python scripts/run_colab_safe.py \
-  --config config/config.full.yaml \
-  --mode full \
-  --run-name full \
-  --model transformer_encoder \
-  --skip-download \
-  --skip-eda \
-  --skip-preprocess
+pytest -q
 ```
 
-Comparar:
-
-```bash
-!python scripts/run_colab_safe.py \
-  --config config/config.full.yaml \
-  --mode full \
-  --run-name full \
-  --compare-only
-```
-
----
-
-## 10. Comandos directos por etapa
-
-También se puede usar `main.py` directamente:
-
-```bash
-python main.py --config config/config.colab.yaml --stage check-data --mode debug
-python main.py --config config/config.colab.yaml --stage eda --mode debug
-python main.py --config config/config.colab.yaml --stage preprocess --mode debug
-python main.py --config config/config.colab.yaml --stage train --model lstm_autoencoder --mode debug
-python main.py --config config/config.colab.yaml --stage evaluate --model lstm_autoencoder --mode debug
-python main.py --config config/config.colab.yaml --stage compare --model all --mode debug
-```
-
-Por seguridad, el CLI bloquea `--model all` en etapas pesadas si no se pasa explícitamente `--allow-all-models`.
-
----
-
-## 11. Artefactos generados
-
-| Carpeta | Contenido |
-|---|---|
-| `data/processed/windows/` | Ventanas Parquet por partición |
-| `models/<modelo>/` | Pesos del modelo y umbral seleccionado |
-| `outputs/metrics/` | Métricas JSON/CSV |
-| `outputs/predictions/` | Predicciones por ventana y vehículo |
-| `outputs/logs/` | Logs de ejecución segura más reciente |
-| `outputs/comparisons/` | Comparaciones generadas por el stage `compare` |
-| `outputs/runs/` | Manifiestos de etapas individuales |
-| `experiments/runs/<run-name>/` | Copia archivada de resultados por corrida |
-
----
-
-## 12. Buenas prácticas aplicadas
-
-- Separación clara entre código, datos y resultados.
-- Configuración externa en YAML.
-- Ejecución modular por etapas.
-- Entrenamiento de un modelo por corrida.
-- Evita `toPandas()` en datos grandes.
-- Preprocesamiento ajustado únicamente con `train`.
-- Umbral seleccionado con `validation`.
-- Evaluación final con `test`.
-- Logs, manifiestos y archivo automático por `--run-name` para trazabilidad.
-- Ventanas guardadas en formato Parquet particionado.
-- Pruebas unitarias básicas en `tests/`.
-
----
-
-## 13. Troubleshooting rápido
-
-### Error: `ConnectionRefusedError` o `Py4JNetworkError`
-
-Spark probablemente se quedó sin memoria o la JVM cayó. Reiniciar runtime y bajar `--max-vehicles`.
-
-### Ejecución muy lenta
-
-Usar `--prepare-only` una sola vez y luego `--skip-preprocess` para entrenar modelos sin regenerar ventanas.
-
-### No encuentra archivos CSV
-
-Ejecutar:
-
-```bash
-python scripts/download_kaggle_to_drive.py --config config/config.colab.yaml
-python scripts/check_raw_files.py --config config/config.colab.yaml
-```
-
-### No hay GPU
-
-Verificar:
-
-```bash
-nvidia-smi
-```
-
-Si no aparece GPU, activar GPU en Colab o entrenar con menos épocas.
-
----
-
-## 14. Pruebas
-
-En local o Colab:
-
-```bash
-pytest
-```
-
----
-
-## 15. Nota metodológica
-
-Por restricciones de memoria y tiempo de ejecución en Google Colab, los modelos se entrenan de forma independiente. Esta decisión no afecta la comparabilidad, porque los tres modelos utilizan las mismas ventanas, las mismas particiones oficiales y los mismos criterios de evaluación.
+Los tests cubren CLI, validación de datos, etiquetas, métricas, factory de modelos, thresholding, agregación por vehículo, estado de preparación, visualizaciones y consolidación entre runs.

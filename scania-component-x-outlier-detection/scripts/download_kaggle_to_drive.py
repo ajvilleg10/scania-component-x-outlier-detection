@@ -10,7 +10,6 @@ if str(SRC_PATH) not in sys.path:
 
 import argparse
 import shutil
-from pathlib import Path
 
 from scania_outliers.config import load_config
 

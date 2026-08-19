@@ -1,26 +1,30 @@
 flowchart LR
+    subgraph GIT[Repositorio Git]
+        CODE[src, scripts, main.py]
+        CFG[config]
+        TEST[tests]
+        DOCS[docs y notebooks]
+    end
+
+    subgraph COLAB[Google Colab]
+        RUNNER[run_colab_safe.py]
+        SPARK[PySpark]
+        TORCH[PyTorch GPU]
+    end
+
     subgraph DRIVE[Google Drive - TFM_SCANIA]
-        RAW[data/raw: CSV originales]
-        PROCESSED[data/processed: datos limpios y ventanas]
-        MODELS[models: checkpoints]
-        OUTPUTS[outputs: métricas, predicciones y figuras]
-        DOC[doc: documento, anexos y defensa]
-        EXP[experiments: runs y manifiestos]
+        RAW[data/raw]
+        CACHE[data/processed/windows]
+        RUNS[experiments/runs/run-name]
+        ART[modelos, métricas, predicciones, tablas, figuras y logs]
     end
 
-    subgraph COLAB[Google Colab con GPU]
-        MAIN[main.py]
-        CONFIG[config.colab.yaml]
-        PIPE[ScaniaOutlierPipeline]
-        SRC[src/scania_outliers]
-    end
-
-    CONFIG --> MAIN
-    MAIN --> PIPE
-    SRC --> PIPE
-    RAW --> PIPE
-    PIPE --> PROCESSED
-    PIPE --> MODELS
-    PIPE --> OUTPUTS
-    PIPE --> EXP
-    OUTPUTS --> DOC
+    CODE --> RUNNER
+    CFG --> RUNNER
+    RUNNER --> SPARK
+    RUNNER --> TORCH
+    RAW --> SPARK
+    SPARK --> CACHE
+    CACHE --> TORCH
+    TORCH --> RUNS
+    RUNS --> ART

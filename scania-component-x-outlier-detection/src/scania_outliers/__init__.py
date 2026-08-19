@@ -5,4 +5,4 @@ but the visible methodology and documentation refer to temporal multivariate out
 detection.
 """
 
-__version__ = "1.1.0"
+__version__ = "3.0.0"

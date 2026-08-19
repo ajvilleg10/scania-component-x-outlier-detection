@@ -1,46 +1,33 @@
 # Arquitectura del proyecto
 
-## Arquitectura general
-
-```mermaid
-flowchart TD
-    A[KaggleHub] --> B[Google Drive data/raw]
-    B --> C[Validación de archivos]
-    C --> D[EDA segura]
-    D --> E[Preprocesamiento con Spark]
-    E --> F[Windowing con Spark]
-    F --> G[Ventanas Parquet]
-    G --> H1[LSTM Autoencoder]
-    G --> H2[CNN-LSTM Autoencoder]
-    G --> H3[Transformer Encoder]
-    H1 --> I1[Evaluación LSTM]
-    H2 --> I2[Evaluación CNN-LSTM]
-    H3 --> I3[Evaluación Transformer]
-    I1 --> J[Comparación final]
-    I2 --> J
-    I3 --> J
-```
-
 ## Separación de responsabilidades
 
-| Componente | Responsabilidad |
-|---|---|
-| `scripts/run_colab_safe.py` | Ejecuta el flujo seguro por etapas en Colab |
-| `main.py` | Punto de entrada general del pipeline |
-| `config/*.yaml` | Parámetros de ejecución, rutas, modelos y evaluación |
-| `spark_session.py` | Configuración Spark sin Arrow para Colab |
-| `preprocessing.py` | Imputación y escalado ajustados solo con train |
-| `spark_windowing.py` | Construcción Spark-native de ventanas temporales |
-| `datasets.py` | Lectura de ventanas Parquet hacia PyTorch |
-| `model_factory.py` | Creación de los tres modelos |
-| `training/trainer.py` | Entrenamiento de autoencoders |
-| `evaluation` / `model_evaluation.py` | Métricas y comparación |
+El repositorio Git contiene únicamente código, configuración, pruebas, notebooks de apoyo y documentación técnica. Google Drive contiene los CSV originales, la caché de ventanas Parquet y los artefactos de cada experimento.
 
-## Decisiones de estabilidad
+```text
+Git repo                                Google Drive
+------------------------------          ---------------------------------------
+main.py                                 TFM_SCANIA/data/raw
+config/                                 TFM_SCANIA/data/processed/windows
+scripts/                                TFM_SCANIA/data/processed/metadata
+src/                                    TFM_SCANIA/data/processed/manifests
+tests/                                  TFM_SCANIA/experiments/runs/<run-name>
+notebooks/
+docs/
+```
 
-- Código ejecutado desde `/content`.
-- Datos persistidos en Drive.
-- Ventanas en Parquet particionado.
-- Sin `toPandas()` en el pipeline principal.
-- Un modelo por corrida.
-- Comparación final al terminar los tres modelos.
+Cada `run-name` es autocontenido respecto de los resultados: modelos, métricas, predicciones, comparaciones, tablas, figuras, logs, manifiestos y configuración efectiva. Las ventanas no se duplican por defecto porque pueden ocupar mucho espacio; se tratan como una caché reproducible derivada de los CSV raw.
+
+## Flujo
+
+1. `--prepare-only`: validación de raw, EDA, preprocesamiento y windowing.
+2. Ejecución individual de cada modelo: entrenamiento + evaluación.
+3. `--compare-only`: consolidación de métricas de los tres modelos del run.
+4. `--report-only`: inventario y resumen del experimento.
+
+El proyecto valida que las ventanas activas correspondan al mismo `run-name` antes de entrenar o evaluar.
+
+
+## Síntesis transversal de experimentos
+
+Cada run es autosuficiente y no sobrescribe a los demás. Al terminar el estudio, `--study-summary` lee únicamente las métricas persistidas en `experiments/runs/*/metrics` y crea `experiments/study_summary/`. Esta carpeta contiene la comparación longitudinal de los runs debug y full, sin modificar los artefactos originales.

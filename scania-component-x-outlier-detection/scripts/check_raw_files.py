@@ -9,7 +9,6 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 import argparse
-from pathlib import Path
 
 from scania_outliers.config import get_dataset_files, load_config
 

@@ -1,18 +1,14 @@
 flowchart TD
-    A[Datos raw en Google Drive] --> B[EDA y calidad de datos]
+    A[CSV raw en Google Drive] --> B[Validación y EDA con PySpark]
     B --> C[Preprocesamiento ajustado solo con train]
-    C --> D[Construcción de ventanas temporales]
-    D --> E[Entrenamiento en Google Colab GPU]
-    E --> F[Cálculo de outlier scores]
-    F --> G[Ajuste de umbral con validation]
+    C --> D[Ventanas temporales Parquet]
+    D --> E1[LSTM Autoencoder]
+    D --> E2[CNN-LSTM Autoencoder]
+    D --> E3[Transformer Encoder simplificado]
+    E1 --> F[Outlier score]
+    E2 --> F
+    E3 --> F
+    F --> G[Umbral seleccionado con validation]
     G --> H[Evaluación final con test]
-    H --> I[Comparación final de modelos]
-    I --> J[Discusión desde mantenimiento predictivo]
-
-    K[main.py] --> L[ScaniaOutlierPipeline]
-    M[config.colab.yaml] --> L
-    L --> B
-    L --> C
-    L --> D
-    L --> E
-    L --> H
+    H --> I[Comparación de modelos]
+    I --> J[Tablas, figuras y discusión]

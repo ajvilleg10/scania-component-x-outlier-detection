@@ -24,8 +24,19 @@ DEFAULT_LABEL_CANDIDATES = (
 )
 
 
+def to_binary_reference_label(value: int | float | None) -> int | None:
+    """Collapse the official temporal class into the binary TFM reference target.
+
+    ``0`` remains negative/reference; any positive class (1..4 in the official
+    validation/test labels) becomes positive. ``None`` remains missing.
+    """
+    if value is None:
+        return None
+    return 1 if int(value) > 0 else 0
+
+
 def infer_label_column(df: DataFrame, candidates: Iterable[str] = DEFAULT_LABEL_CANDIDATES) -> str:
-    """Infer a binary label column from common names.
+    """Infer the available reference-label column from common names.
 
     The SCANIA Component X validation/test label files use `class_label`. Earlier
     prototypes did not include this name, which could break label attachment.
@@ -45,14 +56,30 @@ def prepare_vehicle_level_labels(
 ) -> DataFrame:
     """Create one binary label per vehicle from validation/test labels or train_tte.
 
-    If a vehicle has multiple rows in the reference table, the vehicle is considered
-    positive when at least one row is positive. This is appropriate for vehicle-level
-    evaluation and avoids assuming that every time window has its own label.
+    Validation/test expose five temporal classes (0..4). For the binary outlier
+    task of this project, class 0 is used as the negative/reference group and
+    classes 1..4 are collapsed into a positive group. This conversion is an
+    operational evaluation reference, not a claim that the dataset provides
+    intrinsic point-wise anomaly labels. If a vehicle has multiple rows, it is
+    considered positive when at least one row is positive.
     """
     label_col = label_col or infer_label_column(labels_df)
+    raw_label = F.col(label_col).cast("int")
+
+    # The official validation/test files use five temporal classes (0..4).
+    # For this TFM the evaluation target is binary outlier detection: class 0
+    # is the negative/reference group (>48 time steps before failure), while
+    # classes 1..4 are collapsed into the positive group (within 48 time steps).
+    # train_tte already uses 0/1 and is therefore preserved by the same rule.
+    binary_label = (
+        F.when(raw_label.isNull(), F.lit(None).cast("int"))
+        .when(raw_label > 0, F.lit(1))
+        .otherwise(F.lit(0))
+        .alias(output_col)
+    )
     return (
         labels_df
-        .select(vehicle_col, F.col(label_col).cast("int").alias(output_col))
+        .select(vehicle_col, binary_label)
         .groupBy(vehicle_col)
         .agg(F.max(output_col).alias(output_col))
     )

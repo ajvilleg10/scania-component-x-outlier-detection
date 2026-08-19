@@ -2,18 +2,13 @@ flowchart TD
     A[SCANIA Component X] --> B[Train oficial]
     A --> C[Validation oficial]
     A --> D[Test oficial]
-
-    B --> B1[Ajuste de imputación]
-    B --> B2[Ajuste de escalado]
-    B --> B3[Entrenamiento de modelos]
-
-    C --> C1[Control de entrenamiento]
-    C --> C2[Selección de hiperparámetros]
-    C --> C3[Ajuste de umbral]
-
-    D --> D1[Evaluación final]
-    D --> D2[Métricas definitivas]
-    D --> D3[Predicciones finales]
-
-    A --> E[No se realiza nueva partición]
-    A --> F[No se aplica validación cruzada]
+    B --> B1[train_tte: 0 sin reparación / 1 reparación]
+    B1 --> B2[Entrenamiento con vehículos de referencia normal]
+    C --> C0[class_label oficial 0..4]
+    D --> D0[class_label oficial 0..4]
+    C0 --> C1[Referencia binaria: 0 negativo / 1..4 positivo]
+    D0 --> D1[Referencia binaria: 0 negativo / 1..4 positivo]
+    C1 --> C2[Early stopping y selección del umbral]
+    D1 --> D2[Evaluación final a nivel vehículo]
+    A --> E[Sin nueva partición]
+    A --> F[Sin cross-validation]

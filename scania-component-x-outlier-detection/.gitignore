@@ -1,51 +1,37 @@
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
-.ipynb_checkpoints/
 .pytest_cache/
+.ipynb_checkpoints/
 
-# Environments
+# Environments / editors
 .env
 .venv/
 venv/
+.vscode/
+.idea/
 
-# Colab / local runtime
-sample_data/
-content/
-
-# Data generated outside Git
-*.csv
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-*.npz
-*.npy
-*.parquet
-
-# Models and checkpoints
-models/**/*.pt
-models/**/*.pth
-models/**/*.ckpt
-models/**/*.pkl
-models/**/*.joblib
-!models/**/.gitkeep
-
-# Generated outputs
-reports/figures/*
-reports/tables/*
-reports/metrics/*
-!reports/figures/.gitkeep
-!reports/tables/.gitkeep
-!reports/metrics/.gitkeep
+# Runtime data and ML artifacts live in Google Drive, not Git
+data/
+experiments/
 outputs/
-
-# Logs
-*.log
+models/
+reports/
 runs/
 mlruns/
+
+# Large/generated artifacts
+*.csv
+*.parquet
+*.npz
+*.npy
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.joblib
+*.log
+*.zip
 
 # OS
 .DS_Store

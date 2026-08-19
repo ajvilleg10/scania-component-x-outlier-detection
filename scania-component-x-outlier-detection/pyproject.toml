@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scania-component-x-outliers"
-version = "2.0.0"
+version = "3.0.0"
 description = "Detección de outliers temporales multivariados del dataset SCANIA Component X"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Alex Villegas" }]
 dependencies = [
+    "kagglehub>=0.3.0",
     "pyspark>=3.5,<4.0",
-    "findspark>=2.0",
     "pyarrow>=14.0",
     "numpy>=1.24",
     "matplotlib>=3.7",

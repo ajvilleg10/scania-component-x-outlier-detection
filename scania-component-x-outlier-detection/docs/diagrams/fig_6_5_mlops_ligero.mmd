@@ -1,21 +1,20 @@
 flowchart TD
-    A[Inicio de ejecución] --> B[Generación de run_id]
-    B --> C[Carga de configuración]
-    C --> D[Semilla reproducible]
-    D --> E[Ejecución del pipeline]
-
-    E --> F[Preprocesamiento]
-    E --> G[Entrenamiento]
-    E --> H[Evaluación]
-    E --> I[Comparación]
-
-    F --> F1[preprocessing_metadata.json]
-    G --> G1[model.pt y training_history.json]
-    H --> H1[predictions y metrics]
-    I --> I1[comparison_all_models.csv]
-
-    F1 --> J[Manifest de ejecución]
-    G1 --> J
-    H1 --> J
-    I1 --> J
-    J --> K[Resultados trazables]
+    A[run-name] --> B[prepare-only]
+    B --> C[Huella de preparación activa]
+    C --> D1[LSTM Autoencoder]
+    C --> D2[CNN-LSTM Autoencoder]
+    C --> D3[Transformer Encoder]
+    D1 --> E[Entrenamiento + evaluación]
+    D2 --> E
+    D3 --> E
+    E --> F[compare-only]
+    F --> G[report-only]
+    G --> H[experiments/runs/run-name]
+    H --> H1[config_used.yaml]
+    H --> H2[models]
+    H --> H3[metrics y predictions]
+    H --> H4[tables y figures]
+    H --> H5[logs y manifests]
+    H --> I[Runs debug/full preservados]
+    I --> J[study-summary]
+    J --> K[Tablas y figuras transversales del estudio]

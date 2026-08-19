@@ -3,28 +3,21 @@ project:
   package_name: scania_outliers
   seed: 42
   objective: outlier_detection_multivariate_time_series
-  version: 2.0.0
+  version: 3.0.0
 environment:
   platform: google_colab
   use_drive: true
-  install_mode: editable
   primary_execution: google_colab_gpu
 execution:
   mode: debug
   max_vehicles_debug: 25
-  document_sampling_if_used: true
+  debug_min_positive_vehicles: 2
   save_intermediate_artifacts: true
 paths:
   drive_root: /content/drive/MyDrive/TFM_SCANIA
   raw_dir: /content/drive/MyDrive/TFM_SCANIA/data/raw
   raw_dir_alternative: /content/drive/MyDrive/TFM_SCANIA/raw
   processed_dir: /content/drive/MyDrive/TFM_SCANIA/data/processed
-  models_dir: /content/drive/MyDrive/TFM_SCANIA/models
-  outputs_dir: /content/drive/MyDrive/TFM_SCANIA/outputs
-  figures_dir: /content/drive/MyDrive/TFM_SCANIA/outputs/figures
-  tables_dir: /content/drive/MyDrive/TFM_SCANIA/outputs/tables
-  metrics_dir: /content/drive/MyDrive/TFM_SCANIA/outputs/metrics
-  doc_dir: /content/drive/MyDrive/TFM_SCANIA/doc
   experiments_dir: /content/drive/MyDrive/TFM_SCANIA/experiments
 dataset:
   vehicle_col: vehicle_id
@@ -49,6 +42,10 @@ dataset:
   train_label_source: train_tte
   validation_label_source: validation_labels
   test_label_source: test_labels
+  binary_reference_target:
+    train_tte: in_study_repair 0=reference_normal, 1=repaired
+    validation_test: class_label 0=reference_negative_gt_48_time_steps, 1_4=positive_within_48_time_steps
+    interpretation: Referencia binaria para evaluar deteccion de outliers; no se interpreta como etiqueta puntual intrinseca de anomalia.
   label_column_candidates:
   - class_label
   - in_study_repair
@@ -60,37 +57,38 @@ dataset:
   - anomaly
   - repair
   - failure
-  validation_strategy:
-    use_official_split: true
-    cross_validation: false
-    additional_train_split: false
-    reason: SCANIA Component X ya proporciona train, validation y test; se respeta
-      la particion oficial.
   kaggle:
     dataset_slug: tapanbatla/scania-component-x-dataset-2025
-    download_cache: kagglehub_default_cache
     copy_to_raw_dir_required: true
-    note: KaggleHub descarga en cache temporal de Colab; los CSV deben copiarse a
-      paths.raw_dir antes de ejecutar el pipeline.
 spark:
   app_name: ScaniaComponentXOutlierDetection
   master: local[*]
   shuffle_partitions: 4
-  driver_memory: 10g
+  driver_memory: 8g
   arrow_enabled: false
   debug_max_to_string_fields: 400
   adaptive_enabled: true
+eda:
+  fast_debug: true
+  skip_exact_counts_in_debug: true
+  generate_feature_figures: true
+  visual_sample_fraction: 0.02
+  visual_max_rows: 5000
+  visual_max_features: 10
+  correlation_max_features: 12
+  trajectory_plot_max_vehicles: 5000
+  missing_plot_top_n: 25
+  note: Las distribuciones, box plots y correlaciones usan una muestra acotada para
+    visualizacion; las metricas de modelos no usan esta muestra.
 preprocessing:
   id_col: vehicle_id
   time_col: time_step
   max_missing_ratio: 0.8
   fill_strategy: median
-  min_variance: 0.0
   fit_preprocessing_on: train
   fit_scaler_on: train
   use_specifications: false
   drop_constant_columns: true
-  metadata_file: preprocessing_metadata.json
   exclude_columns:
   - vehicle_id
   - time_step
@@ -151,62 +149,29 @@ evaluation:
   primary_split: test
   validation_split: validation
   primary_level: vehicle
-  secondary_level: window
+  secondary_level: window_scores_descriptive
   metrics:
   - precision
   - recall
   - f1_score
   - roc_auc
   - pr_auc
-  comparison_fields:
-  - model
-  - split
-  - level
-  - threshold
-  - precision
-  - recall
-  - f1_score
-  - roc_auc
-  - pr_auc
-  - training_time_seconds
-  - inference_time_seconds
-  - n_samples
-  - n_outliers
-automation:
-  main_command: python scripts/run_colab_safe.py --config config/config.colab.yaml --mode debug --max-vehicles 25 --prepare-only
-  stages:
-  - eda
-  - preprocess
-  - train
-  - evaluate
-  - compare
-  colab_support: native_python_execution
-  notes:
-  - Los notebooks quedan como soporte explicativo, no como flujo obligatorio.
-  - El flujo oficial se ejecuta desde main.py o desde el comando scania-outliers.
-  - No se realiza cross-validation ni particiones adicionales; se respetan train,
-    validation y test oficiales.
-  - El conjunto test queda reservado exclusivamente para evaluacion final.
-  execution_environment: google_colab_drive
-eda:
-  fast_debug: true
-  skip_heavy_operational_reports_in_debug: true
-  skip_exact_counts_in_debug: true
-optimization:
-  early_debug_filter_before_preprocessing: true
-  avoid_spark_ml_vector_scaler: true
-  avoid_to_pandas: true
-  notes:
-  - En modo debug se filtran vehiculos antes de imputacion, escalado y windowing.
-  - El preprocesamiento usa expresiones escalares de Spark para evitar VectorAssembler/StandardScaler.
-  - No se configura spark.sql.execution.arrow.enabled porque esta deprecado desde
-    Spark 3.0.
-
 professional_execution:
   recommended_flow:
-    - prepare_once
-    - train_one_model
-    - evaluate_one_model
-    - compare_at_end
+  - prepare_once
+  - run_lstm
+  - run_cnn_lstm
+  - run_transformer
+  - compare
+  - report
+  - study_summary
   train_all_models_together: false
-  reason: En Google Colab se reduce el riesgo de caídas entrenando y evaluando un modelo por ejecución.
+  run_scoped_artifacts: true
+  working_windows_are_shared_cache: true
+  reason: Cada --run-name conserva modelos, metricas, predicciones, tablas, figuras,
+    logs y manifiestos sin mezclar experimentos.
+comparison:
+  allow_partial: false
+  primary_level: vehicle
+  primary_metric: pr_auc
+  secondary_metric: f1_score

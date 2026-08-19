@@ -3,8 +3,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, List
 
-from pyspark.sql import DataFrame
-from pyspark.sql import functions as F
+try:
+    from pyspark.sql import DataFrame
+    from pyspark.sql import functions as F
+except Exception:  # pragma: no cover
+    DataFrame = Any  # type: ignore
+    F = None  # type: ignore
 
 
 @dataclass

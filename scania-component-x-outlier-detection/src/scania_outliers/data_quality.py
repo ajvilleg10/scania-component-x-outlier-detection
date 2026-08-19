@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Iterable, List
+from typing import Any, Iterable, List
 
-from pyspark.sql import DataFrame
-from pyspark.sql import functions as F
+try:
+    from pyspark.sql import DataFrame
+    from pyspark.sql import functions as F
+except Exception:  # pragma: no cover
+    DataFrame = Any  # type: ignore
+    F = None  # type: ignore
 
 
 class DataQualityAnalyzer:

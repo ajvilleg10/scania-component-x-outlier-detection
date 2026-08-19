@@ -8,29 +8,62 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from scania_outliers.config import ensure_directories
 from scania_outliers.spark_session import create_spark_session
 
 
 @dataclass
 class PipelinePaths:
+    """Runtime paths.
+
+    Only raw/processed data are shared between executions. Every model/result
+    artifact is written below experiments/runs/<run_id>, which prevents one
+    debug/full experiment from overwriting another.
+    """
+
     drive_root: Path
     raw_dir: Path
     processed_dir: Path
-    models_dir: Path
-    outputs_dir: Path
-    figures_dir: Path
-    tables_dir: Path
-    metrics_dir: Path
-    doc_dir: Path
+    experiments_dir: Path
     run_dir: Path
+
+    @property
+    def models_dir(self) -> Path:
+        return self.run_dir / "models"
+
+    @property
+    def metrics_dir(self) -> Path:
+        return self.run_dir / "metrics"
+
+    @property
+    def predictions_dir(self) -> Path:
+        return self.run_dir / "predictions"
+
+    @property
+    def figures_dir(self) -> Path:
+        return self.run_dir / "figures"
+
+    @property
+    def tables_dir(self) -> Path:
+        return self.run_dir / "tables"
+
+    @property
+    def comparisons_dir(self) -> Path:
+        return self.run_dir / "comparisons"
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.run_dir / "logs"
+
+    @property
+    def manifests_dir(self) -> Path:
+        return self.run_dir / "manifests"
 
 
 class PipelineContext:
-    """Central object shared by all stages.
-
-    It owns configuration, paths, run id, logging and Spark session creation.
-    """
+    """Central execution context shared by all stages."""
 
     def __init__(self, config: dict[str, Any], config_path: Path, run_id: str | None = None):
         self.config = config
@@ -40,6 +73,7 @@ class PipelineContext:
         ensure_directories(config)
         self.paths = self._build_paths()
         self.paths.run_dir.mkdir(parents=True, exist_ok=True)
+        self._save_effective_config()
         self.spark = None
 
     def _build_logger(self) -> logging.Logger:
@@ -53,19 +87,20 @@ class PipelineContext:
 
     def _build_paths(self) -> PipelinePaths:
         p = self.config.get("paths", {})
-        outputs_dir = Path(p.get("outputs_dir", "outputs"))
+        experiments_dir = Path(p.get("experiments_dir", Path(p.get("drive_root", ".")) / "experiments"))
         return PipelinePaths(
             drive_root=Path(p.get("drive_root", ".")),
             raw_dir=Path(p.get("raw_dir", "data/raw")),
             processed_dir=Path(p.get("processed_dir", "data/processed")),
-            models_dir=Path(p.get("models_dir", "models")),
-            outputs_dir=outputs_dir,
-            figures_dir=Path(p.get("figures_dir", outputs_dir / "figures")),
-            tables_dir=Path(p.get("tables_dir", outputs_dir / "tables")),
-            metrics_dir=Path(p.get("metrics_dir", outputs_dir / "metrics")),
-            doc_dir=Path(p.get("doc_dir", "doc")),
-            run_dir=outputs_dir / "runs" / self.run_id,
+            experiments_dir=experiments_dir,
+            run_dir=experiments_dir / "runs" / self.run_id,
         )
+
+    def _save_effective_config(self) -> None:
+        path = self.paths.run_dir / "config_used.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            yaml.safe_dump(self.config, f, allow_unicode=True, sort_keys=False)
 
     def get_spark(self):
         if self.spark is None:
@@ -78,17 +113,22 @@ class PipelineContext:
             self.logger.info("Stopping Spark session")
             try:
                 self.spark.stop()
-            except Exception as exc:  # Spark JVM may already be dead after an OOM/Py4J failure.
+            except Exception as exc:
                 self.logger.warning("Spark session could not be stopped cleanly: %s", exc)
             finally:
                 self.spark = None
 
-    def artifact_path(self, *parts: str | os.PathLike) -> Path:
-        path = self.paths.run_dir.joinpath(*map(str, parts))
+    def artifact_path(self, category: str, *parts: str | os.PathLike) -> Path:
+        """Return a run-scoped artifact path and create only its parent on demand."""
+        path = self.paths.run_dir.joinpath(category, *map(str, parts))
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
-    def save_stage_manifest(self, stage: str, payload: dict[str, Any]) -> None:
+    def model_path(self, model_name: str, filename: str) -> Path:
+        return self.artifact_path("models", model_name, filename)
+
+    def save_stage_manifest(self, stage: str, payload: dict[str, Any]) -> Path:
         path = self.artifact_path("manifests", f"{stage}.json")
         with path.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False, default=str)
+        return path
