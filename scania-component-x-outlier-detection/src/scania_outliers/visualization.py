@@ -92,17 +92,37 @@ def save_feature_distributions(values: np.ndarray, feature_names: list[str], out
 
 
 def save_feature_boxplots(values: np.ndarray, feature_names: list[str], output_path: str | Path) -> None:
+    """Box plots comparing several raw operational variables side by side.
+
+    SCANIA Component X mixes variables on very different raw scales (some
+    stay near zero, others reach 1e8+). Plotting them together on one shared
+    linear axis crushes every low-magnitude variable into an invisible flat
+    line at zero. Each variable is z-scored (median/IQR-robust) for this
+    *display only* so all boxes are visible on a common axis; the underlying
+    modeling pipeline is unaffected, since it uses its own train-fitted
+    winsorized z-score (see ``preprocessing.py``).
+    """
     import matplotlib.pyplot as plt
 
     if values.size == 0 or not feature_names:
         return
     n = min(values.shape[1], len(feature_names), 8)
-    data = [values[:, i][np.isfinite(values[:, i])] for i in range(n)]
+    data = []
+    for i in range(n):
+        col = values[:, i][np.isfinite(values[:, i])]
+        if col.size == 0:
+            data.append(col)
+            continue
+        median = np.median(col)
+        iqr = np.percentile(col, 75) - np.percentile(col, 25)
+        scale = iqr if iqr > 0 else (np.std(col) or 1.0)
+        data.append((col - median) / scale)
     path = _prepare_path(output_path)
     fig, ax = plt.subplots(figsize=(max(9, 1.15 * n), 5.5))
     _boxplot(ax, data, feature_names[:n], showfliers=False)
-    ax.set_title("Box plots de variables operacionales seleccionadas")
-    ax.set_ylabel("Valor")
+    ax.axhline(0.0, color="grey", linewidth=0.8, linestyle="--")
+    ax.set_title("Box plots de variables operacionales seleccionadas (escala robusta por variable)")
+    ax.set_ylabel("Desviación robusta ((valor − mediana) / IQR)")
     ax.tick_params(axis="x", rotation=45)
     fig.tight_layout()
     fig.savefig(path, dpi=160, bbox_inches="tight")
@@ -297,11 +317,22 @@ def save_roc_curve(y_true, scores, output_path: str | Path, model_name: str) -> 
 
 
 def save_score_distribution(y_true, scores, output_path: str | Path, model_name: str) -> None:
+    """Histogram of outlier scores by class, on a log-scale x-axis with shared bins.
+
+    Reconstruction-error scores are strictly positive and typically span
+    several orders of magnitude with a long right tail (a handful of extreme
+    windows next to a dense cluster near zero). Plotting that on a linear
+    axis with independently-binned classes crushes the whole distribution
+    into a single bar and makes the minority class invisible. This version
+    bins both classes on a shared, log-spaced axis and normalizes each
+    class's histogram to a density, so the minority (outlier) class remains
+    visible and comparable in shape even though it has far fewer vehicles.
+    """
     import matplotlib.pyplot as plt
 
     y_true = np.asarray(y_true, dtype=int)
     scores = np.asarray(scores, dtype=float)
-    mask = (y_true >= 0) & np.isfinite(scores)
+    mask = (y_true >= 0) & np.isfinite(scores) & (scores > 0)
     y_true, scores = y_true[mask], scores[mask]
     if y_true.size == 0:
         return
@@ -309,12 +340,17 @@ def save_score_distribution(y_true, scores, output_path: str | Path, model_name:
     fig, ax = plt.subplots(figsize=(8, 5))
     normal = scores[y_true == 0]
     outlier = scores[y_true == 1]
+
+    log_scores = np.log10(scores)
+    bins = np.logspace(log_scores.min(), log_scores.max(), 31)
+
     if normal.size:
-        ax.hist(normal, bins=30, alpha=0.65, label="Normal")
+        ax.hist(normal, bins=bins, alpha=0.6, label=f"Normal (n={normal.size})", density=True)
     if outlier.size:
-        ax.hist(outlier, bins=30, alpha=0.65, label="Outlier")
-    ax.set_xlabel("Outlier score")
-    ax.set_ylabel("Frecuencia")
+        ax.hist(outlier, bins=bins, alpha=0.6, label=f"Outlier (n={outlier.size})", density=True)
+    ax.set_xscale("log")
+    ax.set_xlabel("Outlier score (escala log)")
+    ax.set_ylabel("Densidad")
     ax.set_title(f"Distribución de scores por clase - {model_name}")
     ax.legend()
     fig.tight_layout()
@@ -323,11 +359,18 @@ def save_score_distribution(y_true, scores, output_path: str | Path, model_name:
 
 
 def save_score_boxplot(y_true, scores, output_path: str | Path, model_name: str) -> None:
+    """Box plot of outlier scores by class, on a log scale, with outliers shown.
+
+    Unlike the earlier version, this keeps the flier points (``showfliers=True``):
+    for reconstruction-error scores, the extreme points are exactly the part of
+    the distribution this plot exists to show, and hiding them understates how
+    heavy-tailed and overlapping the two classes are.
+    """
     import matplotlib.pyplot as plt
 
     y_true = np.asarray(y_true, dtype=int)
     scores = np.asarray(scores, dtype=float)
-    mask = (y_true >= 0) & np.isfinite(scores)
+    mask = (y_true >= 0) & np.isfinite(scores) & (scores > 0)
     y_true, scores = y_true[mask], scores[mask]
     groups = []
     labels = []
@@ -335,13 +378,14 @@ def save_score_boxplot(y_true, scores, output_path: str | Path, model_name: str)
         arr = scores[y_true == label]
         if arr.size:
             groups.append(arr)
-            labels.append(name)
+            labels.append(f"{name} (n={arr.size})")
     if not groups:
         return
     path = _prepare_path(output_path)
     fig, ax = plt.subplots(figsize=(6.5, 5))
-    _boxplot(ax, groups, labels, showfliers=False)
-    ax.set_ylabel("Outlier score")
+    _boxplot(ax, groups, labels, showfliers=True, flierprops={"marker": "o", "markersize": 3, "alpha": 0.4})
+    ax.set_yscale("log")
+    ax.set_ylabel("Outlier score (escala log)")
     ax.set_title(f"Box plot de scores - {model_name}")
     fig.tight_layout()
     fig.savefig(path, dpi=160, bbox_inches="tight")
@@ -399,11 +443,80 @@ def save_runtime_comparison_plot(rows: list[dict], output_path: str | Path, leve
     plt.close(fig)
 
 
-def save_cross_run_metric_plot(rows: list[dict], metric: str, output_path: str | Path) -> None:
-    """Plot a vehicle-level metric across debug/full runs for every model.
+def save_learning_curve_plot(points: list[dict], metric: str, output_path: str | Path, model_name: str) -> None:
+    """Line chart of a metric vs. training-set size, with a spread band across seed repeats.
 
-    This chart is intended for the TFM development background. It does not
-    replace the final full-run comparison.
+    Unlike `save_cross_run_metric_plot` (debug_025 vs full — a bar chart,
+    because those categories have no real statistical relationship to each
+    other), this one earns a line chart: `points` here come from repeated,
+    independently-seeded random samples at each size, so training-set size is
+    a genuine ordinal/continuous experimental variable and the mean ± spread
+    across seeds is a legitimate trend, not a decoration.
+
+    Each entry in `points` needs at minimum: {"n_vehicles": int, "seed": int,
+    metric: float}. A point with only one seed (typically the `full` anchor)
+    is plotted as a single marker with no band, and is visually distinguished
+    from the multi-seed points so it isn't mistaken for equally-repeated
+    evidence.
+    """
+    import matplotlib.pyplot as plt
+
+    by_n: dict[int, list[float]] = {}
+    for row in points:
+        if row.get(metric) is None:
+            continue
+        by_n.setdefault(int(row["n_vehicles"]), []).append(float(row[metric]))
+    if not by_n:
+        return
+
+    sizes = sorted(by_n.keys())
+    means = [float(np.mean(by_n[n])) for n in sizes]
+    stds = [float(np.std(by_n[n])) if len(by_n[n]) > 1 else 0.0 for n in sizes]
+    n_seeds = [len(by_n[n]) for n in sizes]
+
+    path = _prepare_path(output_path)
+    fig, ax = plt.subplots(figsize=(8.5, 5.5))
+
+    multi = [i for i, n in enumerate(n_seeds) if n > 1]
+    single = [i for i, n in enumerate(n_seeds) if n == 1]
+
+    if multi:
+        xs = [sizes[i] for i in multi]
+        ys = [means[i] for i in multi]
+        lo = [means[i] - stds[i] for i in multi]
+        hi = [means[i] + stds[i] for i in multi]
+        ax.plot(xs, ys, marker="o", color="tab:blue", label=f"media ± desv. estándar (n={n_seeds[multi[0]]} semillas)")
+        ax.fill_between(xs, lo, hi, color="tab:blue", alpha=0.2)
+    if single:
+        xs = [sizes[i] for i in single]
+        ys = [means[i] for i in single]
+        ax.scatter(xs, ys, marker="*", s=160, color="tab:orange", zorder=5, label="ancla sin repetición (full)")
+
+    ax.set_xscale("log")
+    ax.set_xlabel("Vehículos de entrenamiento (escala log)")
+    ax.set_ylabel(metric)
+    ax.set_title(f"Curva de aprendizaje - {model_name} ({metric})")
+    ax.set_ylim(0, 1.05)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=170, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_cross_run_metric_plot(rows: list[dict], metric: str, output_path: str | Path) -> None:
+    """Bar chart comparing a vehicle-level metric across debug subsamples and the full run.
+
+    IMPORTANT — this is a pipeline-scalability sanity check, not a thesis
+    result: ``debug_025``…``debug_200`` are small, deterministic subsamples of
+    vehicles used only to verify the pipeline runs end-to-end at increasing
+    size before committing to the full (GPU-hours-long) run. They are not
+    successive training epochs or hyperparameter iterations, so a connected
+    line chart would visually imply an "evolution"/trend that does not exist
+    statistically between them. This renders grouped bars instead, and
+    visually separates ``full`` (the actual experimental result) from the
+    debug subsamples with a distinct hatch pattern and a divider line, so the
+    two are never confused when this figure is reused outside the pipeline
+    validation appendix.
     """
     import matplotlib.pyplot as plt
 
@@ -425,25 +538,39 @@ def save_cross_run_metric_plot(rows: list[dict], metric: str, output_path: str |
 
     run_names = sorted({str(row.get("run_name")) for row in filtered}, key=run_key)
     model_names = sorted({str(row.get("model")) for row in filtered})
-    x = np.arange(len(run_names))
+    n_runs = len(run_names)
+    n_models = len(model_names)
+    x = np.arange(n_runs)
+    width = 0.8 / max(n_models, 1)
     path = _prepare_path(output_path)
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    fig, ax = plt.subplots(figsize=(max(9, 1.3 * n_runs), 5.5))
 
-    for model in model_names:
+    for idx, model in enumerate(model_names):
         by_run = {
             str(row.get("run_name")): float(row[metric])
             for row in filtered
             if str(row.get("model")) == model and row.get(metric) is not None
         }
         y = [by_run.get(run_name, np.nan) for run_name in run_names]
-        ax.plot(x, y, marker="o", label=model)
+        offset = (idx - (n_models - 1) / 2) * width
+        hatches = ["" if name != "full" else "//" for name in run_names]
+        bars = ax.bar(x + offset, y, width, label=model)
+        for bar, hatch in zip(bars, hatches):
+            bar.set_hatch(hatch)
+
+    if "full" in run_names:
+        divider = run_names.index("full") - 0.5
+        ax.axvline(divider, color="black", linewidth=0.8, linestyle=":")
 
     ax.set_xticks(x)
     ax.set_xticklabels(run_names, rotation=15)
     ax.set_ylim(0, 1.05)
-    ax.set_xlabel("Ejecución")
+    ax.set_xlabel("Ejecución (subconjunto de vehículos; 'full' con relleno rayado = resultado final)")
     ax.set_ylabel(metric)
-    ax.set_title(f"Evolución de {metric} entre ejecuciones")
+    ax.set_title(
+        f"Validación técnica del pipeline por tamaño de submuestra ({metric})\n"
+        "Los runs debug_* comprueban escalabilidad, no son una serie de entrenamiento"
+    )
     ax.legend()
     fig.tight_layout()
     fig.savefig(path, dpi=170, bbox_inches="tight")

@@ -16,6 +16,8 @@ def preparation_payload(config: dict[str, Any], run_name: str) -> dict[str, Any]
         "mode": execution.get("mode", "debug"),
         "max_vehicles": execution.get("max_vehicles_debug") if execution.get("mode", "debug") == "debug" else None,
         "debug_min_positive_vehicles": execution.get("debug_min_positive_vehicles", 2),
+        "learning_curve_n_vehicles": execution.get("learning_curve_n_vehicles") if execution.get("mode") == "learning_curve" else None,
+        "learning_curve_seed": execution.get("learning_curve_seed") if execution.get("mode") == "learning_curve" else None,
         "dataset_files": dataset.get("files", {}),
         "binary_reference_target": dataset.get("binary_reference_target", {}),
         "preprocessing": {

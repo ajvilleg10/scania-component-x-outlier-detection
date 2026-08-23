@@ -3,7 +3,7 @@ project:
   package_name: scania_outliers
   seed: 42
   objective: outlier_detection_multivariate_time_series
-  version: 3.0.0
+  version: 3.2.0
 environment:
   platform: google_colab
   use_drive: true
@@ -95,8 +95,15 @@ preprocessing:
   - y_true
   - class_label
   - in_study_repair
-  scaling_method: scalar_standard
+  scaling_method: scalar_standard_winsorized
   approximate_quantile_relative_error: 0.05
+  winsorize:
+    enabled: true
+    low_percentile: 1.0
+    high_percentile: 99.0
+    note: Recorta cada variable a su rango [p1, p99] ajustado en train antes de
+      estandarizar, para que picos puntuales de sensor no dominen el z-score
+      ni, mas adelante, el error de reconstruccion.
 windowing:
   window_size: 30
   stride: 5
@@ -139,12 +146,27 @@ outlier_detection:
   prediction_column: is_outlier
   normal_class_name: inlier
   outlier_class_name: outlier
+  scoring:
+    feature_calibrated: true
+    calibration_percentile: 90.0
+    calibration_max_windows: 20000
+    note: El score de una ventana se calcula normalizando el error cuadratico
+      de cada variable por una escala robusta calibrada en ventanas normales
+      de train, y promediando los canales normalizados. Evita que una
+      variable ruidosa domine el score solo por su propia varianza, sin
+      diluir una senal real que solo aparezca en un subconjunto de canales.
   vehicle_aggregation:
-    primary_score: max_score
+    primary_score: p95_score
     additional_scores:
     - mean_score
-    - p95_score
+    - max_score
     - outlier_window_ratio
+    note: p95_score se usa como score principal en lugar de max_score porque,
+      con ventanas solapadas (stride 5 sobre 30 pasos), el maximo por vehiculo
+      esta sesgado por el numero de ventanas observadas (a mas ventanas, mayor
+      maximo esperable por pura estadistica de extremos, sin relacion con una
+      reparacion real). p95 conserva sensibilidad a segmentos anomalos sin
+      heredar ese sesgo.
 evaluation:
   primary_split: test
   validation_split: validation

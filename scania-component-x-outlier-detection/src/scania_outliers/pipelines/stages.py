@@ -17,7 +17,12 @@ except Exception:  # pragma: no cover
 
 from scania_outliers.data_loader import ScaniaDataLoader
 from scania_outliers.data_quality import DataQualityAnalyzer, save_quality_report, save_rows_csv
-from scania_outliers.datasets import inspect_parquet_windows, make_parquet_loader, score_parquet_windows
+from scania_outliers.datasets import (
+    compute_feature_error_scale,
+    inspect_parquet_windows,
+    make_parquet_loader,
+    score_parquet_windows,
+)
 from scania_outliers.experiment_tracking import save_json, save_predictions_table
 from scania_outliers.labels import (
     attach_vehicle_labels,
@@ -305,8 +310,11 @@ class PreprocessingWindowingStage(BaseStage):
 
     def _max_vehicles(self) -> int | None:
         execution = self.config.get("execution", {})
-        if execution.get("mode", "debug") == "debug":
+        mode = execution.get("mode", "debug")
+        if mode == "debug":
             return int(execution.get("max_vehicles_debug", 25))
+        if mode == "learning_curve":
+            return int(execution.get("learning_curve_n_vehicles", 25))
         return None
 
     def _partitions(self) -> int:
@@ -368,6 +376,32 @@ class PreprocessingWindowingStage(BaseStage):
         )
         return negative_ids.unionByName(positive_ids).distinct()
 
+    def _learning_curve_train_ids(self, train_tte_df, n_vehicles: int, seed: int):
+        """True random sample of normal-only training vehicles, reproducible by seed.
+
+        Unlike `_debug_vehicle_ids` (deterministic `orderBy(vehicle_col).limit(n)`,
+        always the same N vehicles regardless of seed), this draws a genuine
+        pseudo-random sample ordered by `F.rand(seed)`. A learning-curve analysis
+        needs independent draws per (size, seed) to estimate a mean and a spread
+        at each training size — a fixed, deterministic subset would give exactly
+        one point per size with no way to tell a real trend from sampling noise.
+        Only train is sampled this way; validation and test stay at their full,
+        official size for every point on the curve (see `run()`), so a change in
+        the metric can only be attributed to training volume, not to a smaller
+        or different evaluation set.
+        """
+        normal_ids = (
+            train_tte_df
+            .where(F.col("in_study_repair").cast("int") == 0)
+            .select(self.vehicle_col)
+            .distinct()
+        )
+        return (
+            normal_ids
+            .orderBy(F.rand(seed))
+            .limit(int(n_vehicles))
+        )
+
     def run(self) -> dict[str, Any]:
         self.log.info("Running preprocessing and optimized Spark-native windowing stage")
         loader = self.loader()
@@ -380,13 +414,23 @@ class PreprocessingWindowingStage(BaseStage):
         validation_labels = loader.read_csv("validation_labels")
         test_labels = loader.read_csv("test_labels")
 
-        if max_vehicles is not None:
+        mode = self.config.get("execution", {}).get("mode", "debug")
+        if mode == "debug":
             train_ids = self._debug_vehicle_ids(train_tte, max_vehicles, normal_only=True)
             val_ids = self._debug_vehicle_ids(validation_labels, max_vehicles)
             test_ids = self._debug_vehicle_ids(test_labels, max_vehicles)
             train_normal = train_op.join(train_ids, on=self.vehicle_col, how="inner")
             validation_labeled = attach_vehicle_labels(validation_op.join(val_ids, on=self.vehicle_col, how="inner"), validation_labels, vehicle_col=self.vehicle_col)
             test_labeled = attach_vehicle_labels(test_op.join(test_ids, on=self.vehicle_col, how="inner"), test_labels, vehicle_col=self.vehicle_col)
+        elif mode == "learning_curve":
+            seed = int(self.config.get("execution", {}).get("learning_curve_seed", 42))
+            train_ids = self._learning_curve_train_ids(train_tte, max_vehicles, seed)
+            train_normal = train_op.join(train_ids, on=self.vehicle_col, how="inner")
+            # Validation and test stay at their FULL, official size for every point
+            # on the curve — only training volume varies. See docstring on
+            # `_learning_curve_train_ids` for why this matters.
+            validation_labeled = attach_vehicle_labels(validation_op, validation_labels, vehicle_col=self.vehicle_col)
+            test_labeled = attach_vehicle_labels(test_op, test_labels, vehicle_col=self.vehicle_col)
         else:
             train_normal = filter_normal_training_vehicles(train_op, train_tte, vehicle_col=self.vehicle_col)
             validation_labeled = attach_vehicle_labels(validation_op, validation_labels, vehicle_col=self.vehicle_col)
@@ -414,6 +458,9 @@ class PreprocessingWindowingStage(BaseStage):
             label_col=self.label_col,
             fill_strategy=str(pre_cfg.get("fill_strategy", "median")),
             approximate_quantile_relative_error=float(pre_cfg.get("approximate_quantile_relative_error", 0.05)),
+            winsorize=bool(pre_cfg.get("winsorize", {}).get("enabled", True)) if isinstance(pre_cfg.get("winsorize"), dict) else bool(pre_cfg.get("winsorize", True)),
+            winsorize_low_percentile=float(pre_cfg.get("winsorize", {}).get("low_percentile", 1.0)) if isinstance(pre_cfg.get("winsorize"), dict) else 1.0,
+            winsorize_high_percentile=float(pre_cfg.get("winsorize", {}).get("high_percentile", 99.0)) if isinstance(pre_cfg.get("winsorize"), dict) else 99.0,
         )
 
         train_normal.unpersist()
@@ -433,6 +480,8 @@ class PreprocessingWindowingStage(BaseStage):
                 {
                     "feature": c,
                     "imputation_value": metadata.imputation_values.get(c) if metadata.imputation_values else None,
+                    "clip_low": metadata.clip_bounds.get(c, {}).get("low") if metadata.clip_bounds else None,
+                    "clip_high": metadata.clip_bounds.get(c, {}).get("high") if metadata.clip_bounds else None,
                     "mean": metadata.scaling_values.get(c, {}).get("mean") if metadata.scaling_values else None,
                     "std": metadata.scaling_values.get(c, {}).get("std") if metadata.scaling_values else None,
                 }
@@ -485,6 +534,7 @@ class PreprocessingWindowingStage(BaseStage):
                 "label_policy": w_cfg.get("label_policy", "vehicle_label"),
                 "execution_mode": self.config.get("execution", {}).get("mode", "debug"),
                 "max_vehicles": max_vehicles,
+                "learning_curve_seed": int(self.config.get("execution", {}).get("learning_curve_seed", 42)) if self.config.get("execution", {}).get("mode") == "learning_curve" else None,
             }
         )
 
@@ -547,14 +597,33 @@ class TrainingStage(BaseStage):
             model_path = self.ctx.model_path(model_name, "model.pt")
             trainer.save(model_path)
 
+            scoring_cfg = self.config.get("outlier_detection", {}).get("scoring", {})
+            feature_scale = None
+            feature_scale_path = None
+            if bool(scoring_cfg.get("feature_calibrated", True)):
+                feature_scale = compute_feature_error_scale(
+                    model_obj,
+                    self._window_path("train"),
+                    batch_size=batch_size,
+                    device=str(modeling.get("device", "auto")),
+                    max_windows=int(scoring_cfg.get("calibration_max_windows", 20000)),
+                    robust_percentile=float(scoring_cfg.get("calibration_percentile", 90.0)),
+                )
+                feature_scale_path = self.ctx.model_path(model_name, "feature_error_scale.json")
+                save_json(
+                    {"model": model_name, "feature_error_scale": feature_scale.tolist()},
+                    feature_scale_path,
+                )
+
             validation_rows = score_parquet_windows(
                 model_obj,
                 self._window_path("validation"),
                 batch_size=batch_size,
                 device=str(modeling.get("device", "auto")),
+                feature_scale=feature_scale,
             )
             validation_vehicle_scores = aggregate_vehicle_scores(validation_rows)
-            score_col = self.config.get("outlier_detection", {}).get("vehicle_aggregation", {}).get("primary_score", "max_score")
+            score_col = self.config.get("outlier_detection", {}).get("vehicle_aggregation", {}).get("primary_score", "p95_score")
             threshold = select_threshold(
                 scores=np.asarray([r[score_col] for r in validation_vehicle_scores], dtype=float),
                 y_true=np.asarray([r["y_true"] for r in validation_vehicle_scores], dtype=int),
@@ -568,6 +637,7 @@ class TrainingStage(BaseStage):
                 "selection_split": "validation",
                 "selection_level": "vehicle",
                 "score_col": score_col,
+                "feature_calibrated_scoring": feature_scale is not None,
                 "history": history,
             }
             threshold_path = self.ctx.model_path(model_name, "threshold.json")
@@ -584,6 +654,7 @@ class TrainingStage(BaseStage):
                 "model_path": str(model_path),
                 "threshold_path": str(threshold_path),
                 "training_history_path": str(history_path),
+                "feature_scale_path": str(feature_scale_path) if feature_scale_path else None,
                 "threshold": float(threshold),
                 "training_time_seconds": float(history.get("training_time_seconds", 0.0)),
             }
@@ -601,6 +672,13 @@ class EvaluationStage(BaseStage):
         if not path.exists():
             raise FileNotFoundError(f"Threshold file not found for {model_name}: {path}")
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def _load_feature_scale(self, model_name: str) -> np.ndarray | None:
+        path = self.ctx.model_path(model_name, "feature_error_scale.json")
+        if not path.exists():
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return np.asarray(payload["feature_error_scale"], dtype=float)
 
     def _load_model(self, model_name: str, n_features: int, window_size: int):
         model = ModelFactory.create(model_name, n_features=n_features, window_size=window_size, config=self.config)
@@ -628,12 +706,18 @@ class EvaluationStage(BaseStage):
         for model_name in requested_models:
             threshold_payload = self._load_threshold(model_name)
             threshold = float(threshold_payload["threshold"])
-            vehicle_score_col = threshold_payload.get("score_col", "max_score")
+            vehicle_score_col = threshold_payload.get("score_col", "p95_score")
             training_time = float(threshold_payload.get("history", {}).get("training_time_seconds", 0.0))
             model_obj = self._load_model(model_name, n_features=n_features, window_size=window_size)
+            # Reuse the same per-feature calibration fitted on normal train windows
+            # during training, so validation and test scores stay comparable to the
+            # threshold selected at training time.
+            feature_scale = self._load_feature_scale(model_name)
 
             start = time.time()
-            window_rows = score_parquet_windows(model_obj, self._window_path(split), batch_size=batch_size, device=device)
+            window_rows = score_parquet_windows(
+                model_obj, self._window_path(split), batch_size=batch_size, device=device, feature_scale=feature_scale
+            )
             inference_time = round(time.time() - start, 3)
             window_rows = threshold_rows(window_rows, threshold, score_col="outlier_score", pred_col="is_outlier")
             vehicle_rows = classify_vehicle_scores(

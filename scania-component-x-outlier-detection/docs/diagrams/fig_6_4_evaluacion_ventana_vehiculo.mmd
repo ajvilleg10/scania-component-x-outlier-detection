@@ -1,18 +1,16 @@
 flowchart TD
     A[Ventana temporal multivariada] --> B[Modelo de reconstrucción]
-    B --> C[Error de reconstrucción]
-    C --> D[Outlier score por ventana]
+    B --> C[Error cuadrático por variable y paso temporal]
+    C --> C1[Calibración: escala robusta por variable en ventanas normales de train]
+    C1 --> C2[Error por variable normalizado por su escala]
+    C2 --> D[Outlier score por ventana = media de errores normalizados]
     D --> E[Agregación por vehículo / trayectoria]
-    E --> E1[max_score]
-    E --> E2[mean_score]
-    E --> E3[p95_score]
-    E --> E4[outlier_window_ratio]
-    E1 --> F[Score principal]
-    E2 --> F
-    E3 --> F
-    E4 --> F
-    F --> G[Umbral seleccionado con validation]
-    G --> H[Predicción normal / outlier por vehículo]
+    E --> E1[p95_score - score principal]
+    E --> E2[mean_score - complementario]
+    E --> E3[max_score - complementario]
+    E --> E4[outlier_window_ratio - complementario]
+    E1 --> F[Umbral seleccionado en validation con curva PR completa]
+    F --> H[Predicción normal / outlier por vehículo]
     H --> I[Referencia binaria de test]
     I --> J[Precision, Recall, F1, PR-AUC y ROC-AUC]
     D --> K[Scores de ventana para análisis temporal descriptivo]

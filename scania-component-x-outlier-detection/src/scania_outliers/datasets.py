@@ -89,11 +89,88 @@ def inspect_parquet_windows(parquet_dir: str | Path) -> dict[str, int]:
 
 
 @torch.no_grad()
-def score_parquet_windows(model, parquet_dir: str | Path, batch_size: int = 512, device: str = "auto") -> list[dict[str, Any]]:
+def compute_feature_error_scale(
+    model,
+    parquet_dir: str | Path,
+    batch_size: int = 512,
+    device: str = "auto",
+    max_windows: int | None = 20000,
+    robust_percentile: float = 90.0,
+) -> np.ndarray:
+    """Calibrate a per-feature reconstruction-error scale from normal windows.
+
+    Some sensor channels are intrinsically noisier or harder to reconstruct than
+    others even under fully normal operation. Combining raw per-window squared
+    error with a flat mean over all channels lets those channels dominate the
+    outlier score and mask the contribution of smaller, but more informative,
+    channels. This function estimates, per feature, a robust "typical normal
+    error" scale (a high percentile of the per-window mean squared error) using
+    windows drawn from the training population, which is normal-only by
+    construction (see ``filter_normal_training_vehicles``). The scale is meant to
+    be passed to :func:`score_parquet_windows` via ``feature_scale`` so every
+    channel contributes comparably to the final score, regardless of its own
+    baseline noise level.
+    """
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = model.to(device)
+    model.eval()
+
+    dataset = _get_pyarrow_dataset(parquet_dir)
+    per_feature_errors: list[np.ndarray] = []
+    seen = 0
+    for batch in dataset.to_batches(columns=["X"], batch_size=batch_size):
+        x_list = batch.column("X").to_pylist()
+        X = torch.tensor(x_list, dtype=torch.float32, device=device)
+        reconstructed = model(X)
+        # Mean squared error per window, per feature (averaged over the time axis only).
+        err = torch.mean((X - reconstructed) ** 2, dim=1).detach().cpu().numpy()  # (batch, n_features)
+        per_feature_errors.append(err)
+        seen += err.shape[0]
+        if max_windows is not None and seen >= max_windows:
+            break
+
+    if not per_feature_errors:
+        raise ValueError(f"No windows found to calibrate feature error scale in {parquet_dir}")
+
+    stacked = np.concatenate(per_feature_errors, axis=0)
+    scale = np.percentile(stacked, robust_percentile, axis=0)
+    positive = scale[scale > 0]
+    # Features that are (near-)perfectly reconstructed under normal conditions get
+    # a scale of ~0. Flooring them with a tiny epsilon would blow up their
+    # normalized error into huge, meaningless values purely from floating-point
+    # noise, dominating the median just as badly as the original problem — only
+    # via a different mechanism. Falling back to the median scale across the
+    # other features treats a degenerate channel as "typical", not "infinitely
+    # sensitive".
+    fallback = float(np.median(positive)) if positive.size else 1e-6
+    scale = np.where(scale > 0, scale, fallback)
+    return scale.astype(float)
+
+
+@torch.no_grad()
+def score_parquet_windows(
+    model,
+    parquet_dir: str | Path,
+    batch_size: int = 512,
+    device: str = "auto",
+    feature_scale: np.ndarray | None = None,
+) -> list[dict[str, Any]]:
     """Run reconstruction scoring over Parquet windows and return prediction rows.
 
     The returned rows are window-level records containing metadata and an
     `outlier_score`. They can later be classified and aggregated at vehicle level.
+
+    When ``feature_scale`` is provided (see :func:`compute_feature_error_scale`),
+    each feature's squared error is first normalized by its own calibrated scale
+    — so every channel contributes on a comparable footing regardless of its
+    raw units or inherent noise level — and the window score is the mean
+    across normalized channels. Normalizing first (rather than taking a robust
+    aggregate like the median afterwards) matters here: a median would treat a
+    real degradation signal that only shows up in a minority of channels as
+    noise and dilute it away. When ``feature_scale`` is ``None`` the function
+    falls back to the original flat mean over time and features, kept for
+    backward compatibility.
     """
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -105,11 +182,21 @@ def score_parquet_windows(model, parquet_dir: str | Path, batch_size: int = 512,
     rows: list[dict[str, Any]] = []
     columns = ["window_id", "vehicle_id", "start_time_step", "end_time_step", "y_true", "X"]
 
+    scale_tensor = None
+    if feature_scale is not None:
+        scale_tensor = torch.tensor(feature_scale, dtype=torch.float32, device=device)
+
     for batch in dataset.to_batches(columns=columns, batch_size=batch_size):
         x_list = batch.column("X").to_pylist()
         X = torch.tensor(x_list, dtype=torch.float32, device=device)
         reconstructed = model(X)
-        scores = torch.mean((X - reconstructed) ** 2, dim=(1, 2)).detach().cpu().numpy()
+
+        if scale_tensor is None:
+            scores = torch.mean((X - reconstructed) ** 2, dim=(1, 2)).detach().cpu().numpy()
+        else:
+            per_feature = torch.mean((X - reconstructed) ** 2, dim=1)  # (batch, n_features)
+            normalized = per_feature / scale_tensor.unsqueeze(0)
+            scores = torch.mean(normalized, dim=1).detach().cpu().numpy()
 
         window_ids = batch.column("window_id").to_pylist()
         vehicle_ids = batch.column("vehicle_id").to_pylist()

@@ -25,8 +25,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="config/config.colab.yaml")
     parser.add_argument("--stage", choices=VALID_STAGES, default="check-data")
     parser.add_argument("--model", choices=VALID_MODELS, default="lstm_autoencoder")
-    parser.add_argument("--mode", choices=["debug", "full"], default=None)
+    parser.add_argument("--mode", choices=["debug", "full", "learning_curve"], default=None)
     parser.add_argument("--max-vehicles", type=int, default=None, help="Sobrescribe execution.max_vehicles_debug en modo debug.")
+    parser.add_argument("--learning-curve-n-vehicles", type=int, default=None, help="Solo modo learning_curve. Tamaño de la submuestra de train (validation/test permanecen completos).")
+    parser.add_argument("--learning-curve-seed", type=int, default=None, help="Solo modo learning_curve. Semilla del muestreo aleatorio de vehículos de train.")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-spark-stop", action="store_true")
@@ -55,6 +57,11 @@ def main(argv: list[str] | None = None) -> int:
         config.setdefault("execution", {})["max_vehicles_debug"] = int(args.max_vehicles)
     if config.get("execution", {}).get("mode") == "full":
         config.setdefault("execution", {})["max_vehicles_debug"] = None
+    if config.get("execution", {}).get("mode") == "learning_curve":
+        if args.learning_curve_n_vehicles is not None:
+            config.setdefault("execution", {})["learning_curve_n_vehicles"] = int(args.learning_curve_n_vehicles)
+        if args.learning_curve_seed is not None:
+            config.setdefault("execution", {})["learning_curve_seed"] = int(args.learning_curve_seed)
 
     pipeline = ScaniaOutlierPipeline(config=config, config_path=Path(args.config), run_id=args.run_id)
     if args.dry_run:

@@ -1,8 +1,0 @@
-flowchart TD
-    A[Ventana temporal] --> B[Modelo]
-    B --> C[outlier_score por ventana]
-    C --> D[Agregación por vehículo]
-    D --> E[max_score, mean_score, p95_score, ratio]
-    E --> F[Umbral validado]
-    F --> G[Normal / Outlier]
-    G --> H[Métricas con test]

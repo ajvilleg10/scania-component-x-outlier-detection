@@ -305,7 +305,41 @@ Esto evita, por ejemplo, entrenar accidentalmente `debug_025` sobre ventanas gen
 
 Los runs `debug_025`, `debug_050`, `debug_100` y `debug_200` sirven como evidencia del desarrollo progresivo, estabilidad y escalado del pipeline. En validation/test, el modo debug aplica una selección determinista aproximadamente estratificada y garantiza un mínimo pequeño de casos positivos para que las métricas puedan ejercitarse incluso con 25 vehículos. Por ello, estas métricas se interpretan como resultados de validación técnica, no como estimaciones finales. Las métricas de `full` constituyen la comparación experimental principal. Al mantenerse separados por `--run-name`, los resultados anteriores no se pierden cuando se ejecuta el siguiente tamaño.
 
-## 12. Tests
+## 12. Cambios metodológicos v3.1 (scoring robusto)
+
+A partir de la revisión de la ejecución `full`, se identificó que los tres modelos obtenían ROC-AUC ≈ 0.48 (nivel de azar) porque el error de reconstrucción agregado (`mean((X - X̂)^2)` sobre tiempo y variables) quedaba dominado por picos puntuales en un puñado de las 105 variables operacionales, en vez de por degradación real asociada a reparaciones. Se introdujeron tres cambios, todos activables/ajustables por configuración:
+
+1. **Winsorización antes del z-score** (`preprocessing.winsorize`, activa por defecto): cada variable se recorta a su rango [p1, p99] ajustado en train antes de estandarizar, evitando que un pico puntual infle también la media/desviación usadas para escalar.
+2. **Scoring calibrado por variable** (`outlier_detection.scoring.feature_calibrated`, activo por defecto): tras entrenar, se calibra una escala robusta de error "normal" por variable usando únicamente ventanas de train (normales por construcción). En validación/test, el error de cada variable se normaliza por esa escala y el score final es la mediana entre variables — así ninguna variable domina el score solo por ser intrínsecamente más ruidosa.
+3. **Agregación vehículo con `p95_score`** en lugar de `max_score`: con ventanas solapadas (stride 5 / tamaño 30), el máximo por vehículo está sesgado por el número de ventanas observadas. `p95_score` conserva sensibilidad a segmentos anómalos sin heredar ese sesgo.
+
+Estos cambios corrigen un problema metodológico real, pero **las métricas del run `full` incluido en este ZIP siguen siendo las de la ejecución anterior** (con `max_score` y sin winsorizar/calibrar) — no se han inventado métricas nuevas sin volver a entrenar. Es necesario volver a ejecutar `--prepare-only` y el entrenamiento completo en Colab para obtener resultados con el pipeline corregido; ver `CHANGELOG_TFM.md` (v3.1.0) para el detalle completo.
+
+## 13. Empaquetado de la entrega final (Drive → ZIP)
+
+Antes de comprimir `experiments/` para entregar o anexar a la memoria, mantener solo lo defendible como resultado:
+
+- **Incluir**: `experiments/runs/full/**` (resultado experimental principal) y `experiments/study_summary/**` **rotulado explícitamente como anexo de validación técnica del pipeline**, no como resultados comparativos entre modelos.
+- **Excluir del cuerpo de resultados**: `experiments/runs/debug_*/**`. Son útiles como evidencia de reproducibilidad en un anexo, pero mezclarlos con `full` en las mismas figuras/tablas del capítulo de Resultados sugiere una comparación estadística que no existe (son submuestras de depuración, no una serie de entrenamiento).
+- **Eliminar**: cualquier carpeta `experiments/registry/` vacía que pueda persistir de versiones anteriores del proyecto — ningún script del pipeline actual la crea ni la usa (`grep -r registry` no devuelve resultados en `src/`, `scripts/` ni `config/`), así que si aparece en Drive es un residuo manual y puede borrarse sin afectar la ejecución.
+
+## 14. Estudio de curva de aprendizaje (hipótesis específica 1)
+
+Complementa a `debug_025/050/100/200`, que solo validan escalabilidad del pipeline y no responden ninguna hipótesis. El estudio de curva de aprendizaje sí es evidencia para la hipótesis específica 1 (suficiencia de las secuencias preparadas): muestrea aleatoriamente **solo el train**, con varias semillas por tamaño, manteniendo validation/test siempre completos. Ver `docs/learning_curve.md` para el diseño completo.
+
+```python
+!python scripts/run_learning_curve.py \
+  --config config/config.full.yaml \
+  --sizes 25,50,100,200 \
+  --n-seeds 3 \
+  --model lstm_autoencoder
+
+!python scripts/build_learning_curve_summary.py --config config/config.full.yaml
+```
+
+Genera `experiments/learning_curve_summary/{tables,figures}/`, incorporando el run `full` como ancla de tamaño completo sin necesidad de recalcularlo.
+
+## 15. Tests
 
 ```bash
 pytest -q
